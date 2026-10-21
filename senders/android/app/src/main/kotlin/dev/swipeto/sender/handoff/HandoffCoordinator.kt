@@ -10,9 +10,11 @@ import dev.swipeto.sender.data.TrustTokens
 import dev.swipeto.sender.media.MediaFile
 import dev.swipeto.sender.net.ReceiverException
 import dev.swipeto.sender.net.SenderConnection
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -74,6 +76,9 @@ class HandoffCoordinator(
     private val scope: CoroutineScope,
     private val connect: suspend (url: String) -> SenderConnection,
     private val clock: () -> Long = System::currentTimeMillis,
+    /** A screen must report `state` every second while it plays; this long without one means it is gone. */
+    private val stateTimeoutMs: Long = 6_000,
+    private val log: (String) -> Unit = {},
 ) {
     private val _state = MutableStateFlow<LinkState>(LinkState.Idle)
     val state: StateFlow<LinkState> = _state.asStateFlow()
@@ -100,14 +105,17 @@ class HandoffCoordinator(
         try {
             if (!helloOrPair(conn, target)) return false
 
-            val playing = media.kind == MediaKind.VIDEO && local.isPlaying
-            val position = if (media.kind == MediaKind.VIDEO) local.positionMs else 0L
+            // A video that already finished here starts over there.
+            val finished = media.durationMs?.let { local.positionMs >= it - END_SLACK_MS } ?: false
+            val playing = media.kind == MediaKind.VIDEO && (local.isPlaying || finished)
+            val position = if (media.kind == MediaKind.VIDEO && !finished) local.positionMs else 0L
             val url = publisher.publish(media.file, target.host)
             val ack = conn.handoff(MediaInfo(media.kind, url, media.file.mime, media.title, media.durationMs), position, playing)
             if (!ack.accepted) return fail(refusal(target.name, ack.reason), conn)
 
             local.pause()
             lastStateAt = clock()
+            log("handed off to ${target.name} at $position ms, playing=$playing")
             _state.value = LinkState.Remote(target.name, media.title, position, playing, media.durationMs)
             watch(conn, target.name)
             return true
@@ -146,6 +154,7 @@ class HandoffCoordinator(
     /** The phone left the network (or the app is going away): take the media back locally. */
     fun onConnectionLost() {
         val remote = _state.value as? LinkState.Remote ?: return
+        log("lost ${remote.receiverName}; continuing locally")
         _notices.tryEmit("Lost the connection to ${remote.receiverName}. Continuing here.")
         finishRemote(estimatedPosition(remote), remote.playing)
     }
@@ -170,17 +179,35 @@ class HandoffCoordinator(
         watchers?.cancel()
         watchers = scope.launch {
             launch {
-                conn.events.collect { message ->
-                    when (message) {
-                        is PlaybackState -> onState(message)
-                        is ErrorMessage -> _notices.tryEmit("$receiverName: ${message.description}")
-                        else -> Unit
+                try {
+                    conn.events.collect { message ->
+                        when (message) {
+                            is PlaybackState -> onState(message)
+                            is ErrorMessage -> _notices.tryEmit("$receiverName: ${message.description}")
+                            else -> Unit
+                        }
                     }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // Never leave the phone showing a remote that nothing updates any more.
+                    log("state handling failed: $e")
+                    if (connection === conn) onConnectionLost()
                 }
             }
             launch {
                 conn.closed.first { it }
+                log("connection to $receiverName closed")
                 if (_state.value is LinkState.Remote && connection === conn) onConnectionLost()
+            }
+            launch {
+                while (_state.value is LinkState.Remote && connection === conn) {
+                    delay(stateTimeoutMs / 4)
+                    if (_state.value is LinkState.Remote && connection === conn && clock() - lastStateAt > stateTimeoutMs) {
+                        log("no state from $receiverName for ${clock() - lastStateAt} ms")
+                        onConnectionLost()
+                    }
+                }
             }
         }
     }
@@ -227,6 +254,11 @@ class HandoffCoordinator(
         _notices.tryEmit(notice)
         _state.value = LinkState.Idle
         return false
+    }
+
+    private companion object {
+        /** Within this of the end counts as finished. */
+        const val END_SLACK_MS = 500L
     }
 
     private fun refusal(name: String, reason: ErrorCode?) = when (reason) {

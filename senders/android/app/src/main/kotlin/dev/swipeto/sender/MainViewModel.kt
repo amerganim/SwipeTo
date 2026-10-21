@@ -8,6 +8,7 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
@@ -33,6 +34,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+private const val TAG = "SwipeTo"
 
 data class PickedVideo(val uri: Uri, val title: String, val mime: String, val size: Long, val durationMs: Long?)
 
@@ -80,7 +83,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         },
         scope = viewModelScope,
-        connect = { url -> SenderConnection.connect(url, trust.identity) },
+        connect = { url -> SenderConnection.connect(url, trust.identity, log = { Log.i(TAG, it) }) },
+        log = { Log.i(TAG, it) },
     )
 
     val link: StateFlow<LinkState> = coordinator.state
@@ -163,12 +167,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         if (size < 0) size = resolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: return null
         val mime = resolver.getType(uri)?.takeIf { it.startsWith("video/") } ?: "video/mp4"
-        val duration = runCatching {
+        val (duration, embeddedTitle) = runCatching {
             MediaMetadataRetriever().use { retriever ->
                 retriever.setDataSource(getApplication(), uri)
-                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() to
+                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
             }
-        }.getOrNull()
+        }.getOrDefault(null to null)
+        // The Photo Picker often names files by media-store id ("1000033915"), which means nothing to anyone.
+        if (title.all(Char::isDigit)) title = embeddedTitle?.takeIf { it.isNotBlank() } ?: "Video"
         return PickedVideo(uri, title.take(200), mime, size, duration)
     }
 

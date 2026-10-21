@@ -67,6 +67,7 @@ class ReceiverException(message: String, val code: dev.swipeto.protocol.ErrorCod
 class SenderConnection private constructor(
     private val identity: SenderIdentity,
     private val clock: () -> Long,
+    private val log: (String) -> Unit,
 ) {
     private val session = ProtocolSession(Role.SENDER)
     private val pending = ConcurrentHashMap<String, CompletableDeferred<Message>>()
@@ -180,6 +181,7 @@ class SenderConnection private constructor(
             delay(500)
             val now = clock()
             if (now - lastReceived >= SILENCE_TIMEOUT_MS) {
+                log("no message for ${now - lastReceived} ms, dropping the connection")
                 socket.cancel()
                 finish()
             } else if (now - lastSent >= PING_INTERVAL_MS) {
@@ -212,8 +214,9 @@ class SenderConnection private constructor(
             identity: SenderIdentity,
             client: OkHttpClient = defaultClient,
             clock: () -> Long = System::currentTimeMillis,
+            log: (String) -> Unit = {},
         ): SenderConnection {
-            val connection = SenderConnection(identity, clock)
+            val connection = SenderConnection(identity, clock, log)
             val opened = CompletableDeferred<Unit>()
             connection.socket = client.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -223,6 +226,7 @@ class SenderConnection private constructor(
                 override fun onMessage(webSocket: WebSocket, text: String) = connection.onText(text)
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    connection.log("screen closed the connection: $code $reason")
                     webSocket.close(1000, null)
                     connection.finish()
                 }
@@ -230,6 +234,7 @@ class SenderConnection private constructor(
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = connection.finish()
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    if (opened.isCompleted) connection.log("connection failed: $t")
                     opened.completeExceptionally(ReceiverException("Cannot reach the screen: ${t.message}"))
                     connection.finish()
                 }

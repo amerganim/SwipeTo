@@ -34,14 +34,18 @@ class HandoffCoordinatorTest {
     private val target = Target("0e1d2c3b-4a59-4687-9a8b-7c6d5e4f3a21", "Desk", receiver.url, InetAddress.getLoopbackAddress())
     private val media = SharedMedia(FakeFile, MediaKind.VIDEO, "Beach day", 180_000)
 
-    private val coordinator = HandoffCoordinator(
+    private fun newCoordinator(stateTimeoutMs: Long = 60_000) = HandoffCoordinator(
         trust = trust,
         publisher = publisher,
         local = local,
         prompt = PairingPrompt { _, _ -> codes.removeFirstOrNull() },
         scope = scope,
         connect = { url -> SenderConnection.connect(url, SenderIdentity("a1b2c3d4-e5f6-4789-8abc-def012345678", "Phone")) },
+        stateTimeoutMs = stateTimeoutMs,
     )
+
+    // FakeReceiver reports state on events only, not every second, so the default leaves the watchdog out of the way.
+    private val coordinator = newCoordinator()
 
     @AfterEach
     fun tearDown() {
@@ -155,6 +159,28 @@ class HandoffCoordinatorTest {
         withTimeout(5_000) { coordinator.state.first { it == LinkState.Idle } }
         assertTrue(local.isPlaying)
         assertTrue(local.positionMs in 42_200..44_000, "resumed at ${local.positionMs}")
+    }
+
+    @Test
+    fun `screen that stops reporting state is treated as gone`() = runBlocking {
+        val watched = newCoordinator(stateTimeoutMs = 600)
+        assertTrue(watched.sendTo(target, media))
+
+        // FakeReceiver sends one state after the handoff and then nothing: like a screen that hung.
+        withTimeout(5_000) { watched.state.first { it == LinkState.Idle } }
+        assertTrue(local.isPlaying)
+        assertTrue(local.positionMs >= 42_000)
+    }
+
+    @Test
+    fun `a video that finished on the phone starts over on the screen`() = runBlocking {
+        local.positionMs = 180_000
+        local.isPlaying = false
+
+        assertTrue(coordinator.sendTo(target, media))
+
+        assertEquals(0, receiver.lastHandoff!!.positionMs)
+        assertTrue(receiver.lastHandoff!!.playing)
     }
 
     private suspend fun awaitRemote(predicate: (LinkState.Remote) -> Boolean) =

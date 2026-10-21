@@ -27,6 +27,12 @@ public sealed record MockSenderOptions
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SwipeTo", "mock-sender", "state.json");
 
     public TimeSpan DiscoveryTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>When set, the script aims for this long, ends the aim, then aims again before handing off.</summary>
+    public TimeSpan AimHold { get; init; } = TimeSpan.Zero;
+
+    /// <summary>Pause between scripted remote-control steps, to watch (or screenshot) each one.</summary>
+    public TimeSpan StepDelay { get; init; } = TimeSpan.Zero;
 }
 
 public sealed record StepResult(string Step, bool Ok, string Detail, long ElapsedMs);
@@ -37,6 +43,9 @@ public sealed record StepResult(string Step, bool Ok, string Detail, long Elapse
 /// </summary>
 public sealed class MockSenderApp : IAsyncDisposable
 {
+    /// <summary>Real decoders land near, not exactly on, a seek target (Phase 2 accepts ±300 ms).</summary>
+    public const long SeekToleranceMs = 300;
+
     private readonly MockSenderOptions _options;
     private readonly TextWriter _out;
     private readonly SenderState _state;
@@ -135,6 +144,17 @@ public sealed class MockSenderApp : IAsyncDisposable
         var media = new MediaInfo(_options.Mime.StartsWith("image/", StringComparison.Ordinal) ? MediaKind.Image : MediaKind.Video,
             _media.Register(file, _options.Mime, local), _options.Mime, _options.Title, _options.DurationMs);
 
+        if (_options.AimHold > TimeSpan.Zero)
+        {
+            await Step("aim start/end", async () =>
+            {
+                await Client.AimStartAsync();
+                await Task.Delay(_options.AimHold);
+                await Client.AimEndAsync();
+                await Task.Delay(TimeSpan.FromSeconds(1));
+                return (true, $"held {_options.AimHold.TotalMilliseconds:0} ms, then ended");
+            });
+        }
         await Client.AimStartAsync();
         await Step("handoff", async () =>
         {
@@ -152,19 +172,23 @@ public sealed class MockSenderApp : IAsyncDisposable
             await HandoffAsync(playing: true);
             await Step("playing at position", () => WaitState(s => s.Playing && s.PositionMs >= _options.PositionMs - 300 && s.PositionMs <= _options.PositionMs + 3000));
 
+            await Task.Delay(_options.StepDelay);
             await Client.ControlAsync(ControlAction.Pause);
             await Step("pause", () => WaitState(s => !s.Playing));
 
+            await Task.Delay(_options.StepDelay);
             await Client.ControlAsync(ControlAction.Seek, _options.SeekToMs);
-            await Step("seek", () => WaitState(s => !s.Playing && s.PositionMs == _options.SeekToMs));
+            await Step("seek", () => WaitState(s => !s.Playing && Math.Abs(s.PositionMs - _options.SeekToMs) <= SeekToleranceMs));
 
+            await Task.Delay(_options.StepDelay);
             await Client.ControlAsync(ControlAction.Play);
-            await Step("play", () => WaitState(s => s.Playing && s.PositionMs >= _options.SeekToMs));
+            await Step("play", () => WaitState(s => s.Playing && s.PositionMs >= _options.SeekToMs - SeekToleranceMs));
 
+            await Task.Delay(_options.StepDelay);
             await Step("pull-back", async () =>
             {
                 var back = await Client.PullbackAsync();
-                return back.Playing && back.PositionMs >= _options.SeekToMs && back.PositionMs < _options.SeekToMs + 5000
+                return back.Playing && back.PositionMs >= _options.SeekToMs - SeekToleranceMs && back.PositionMs < _options.SeekToMs + 5000
                     ? (back, $"returned {back.PositionMs} ms, playing")
                     : throw new InvalidOperationException($"unexpected pull-back {back.PositionMs} ms playing={back.Playing}");
             });

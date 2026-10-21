@@ -89,15 +89,35 @@ stateDiagram-v2
     HandoffActive --> [*]: close or 15 s silence
 ```
 
-Messages allowed in each state (anything else → `error`):
+Messages allowed in each state (anything else → `error`). A response is sent
+in the state its request arrived in; the transition happens as the response is
+sent and received, so `hello_ack` belongs to *Connected*/*Paired* and moves both
+sides to *Session*.
 
 | State | Sender may send | Receiver may send |
 |---|---|---|
-| Connected | `pair_request`, `hello`, `ping` | `error`, `pong`, `ping` |
-| Pairing | `pair_confirm`, `ping` | `pair_result`, `error`, `pong`, `ping` |
-| Paired | `hello`, `ping` | `error`, `pong`, `ping` |
-| Session | `aim_start`, `aim_end`, `handoff`, `ping` | `hello_ack`, `error`, `pong`, `ping` |
-| HandoffActive | `control`, `pullback_request`, `aim_start`, `aim_end`, `handoff`, `ping` | `handoff_ack`, `state`, `pullback`, `error`, `pong`, `ping` |
+| Connected | `pair_request`, `hello` | `hello_ack` |
+| Pairing | `pair_request`, `pair_confirm` | `pair_result` |
+| Paired | `hello` | `hello_ack` |
+| Session | `aim_start`, `aim_end`, `handoff` | `handoff_ack`, `state` |
+| HandoffActive | `aim_start`, `aim_end`, `handoff`, `control`, `pullback_request` | `handoff_ack`, `state`, `pullback` |
+| *any* | `ping`, `pong`, `error` | `ping`, `pong`, `error` |
+
+`state` is allowed in *Session* so a final `state {ended: true}` that crosses a
+`pullback_request` on the wire is not an error.
+
+Transitions:
+
+| Event | From → To |
+|---|---|
+| `pair_request` | Connected / Pairing / Paired → Pairing |
+| `pair_result ok=true` | Pairing → Paired |
+| `pair_result reason=code_expired / too_many_attempts` | Pairing → Connected |
+| `pair_result reason=wrong_code` | stays in Pairing |
+| `hello_ack accepted=true` | Connected / Paired → Session |
+| `handoff_ack accepted=true` | Session / HandoffActive → HandoffActive |
+| `pullback` | HandoffActive → Session |
+| `state ended=true` | HandoffActive → Session |
 
 A sender message that needs a session (e.g. `handoff`) received before a
 successful `hello` MUST be answered with `error {code: "not_paired"}`.

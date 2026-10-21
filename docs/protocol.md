@@ -99,8 +99,8 @@ sides to *Session*.
 | Connected | `pair_request`, `hello` | `hello_ack` |
 | Pairing | `pair_request`, `pair_confirm` | `pair_result` |
 | Paired | `hello` | `hello_ack` |
-| Session | `aim_start`, `aim_end`, `handoff` | `handoff_ack`, `state` |
-| HandoffActive | `aim_start`, `aim_end`, `handoff`, `control`, `pullback_request` | `handoff_ack`, `state`, `pullback` |
+| Session | `aim_start`, `aim_end`, `handoff` | `aim_ack`, `handoff_ack`, `state` |
+| HandoffActive | `aim_start`, `aim_end`, `handoff`, `control`, `pullback_request` | `aim_ack`, `handoff_ack`, `state`, `pullback` |
 | *any* | `ping`, `pong`, `error` | `ping`, `pong`, `error` |
 
 `state` is allowed in *Session* so a final `state {ended: true}` that crosses a
@@ -190,15 +190,52 @@ of trust tokens MUST be constant-time.
 
 | Message | Direction | Payload |
 |---|---|---|
-| `aim_start` | S → R | none |
+| `aim_start` | S → R | optional `nonce`: a marker nonce the phone's camera read |
+| `aim_ack` | R → S | `locked` (boolean); sent only in reply to an `aim_start` that carries a `nonce` |
 | `aim_end` | S → R | none |
 
-`aim_start` means the phone is raised and pointing at this receiver. The
-receiver shows a thin glowing border around the screen edge and a **marker**: a
-QR code encoding `swipeto:<receiverId>:<nonce>`, where `nonce` is fresh random
-data the receiver rotates (Phase 4 defines rotation and verification).
-`aim_end` hides both. A receiver MUST also hide them on `handoff`, on session
-end, and after **10 s** without a new `aim_start`.
+`aim_start` without a `nonce` means the phone is raised and *may* be pointing at
+this receiver. The receiver shows a thin glowing border around the screen edge
+and a **marker**: a QR code encoding `swipeto:<receiverId>:<nonce>`.
+
+**Marker rotation.** While the marker is shown the receiver replaces `nonce`
+every **2 s** with fresh random data (at least 96 bits, base64url, 16–64
+characters) and redraws the QR. A photo of an old marker is therefore useless a
+few seconds later.
+
+**Lock.** When the phone's camera reads a marker it sends `aim_start` again,
+now with that `nonce`. The receiver answers `aim_ack {locked: true}` (with
+`replyTo`) if the nonce is the current one or the one just before it (so a
+read that crosses a rotation still counts), and `locked: false` otherwise. A
+locked receiver SHOULD show the glow in its *locked* style. Locking is an
+assurance, not a gate: a `handoff` is accepted with or without it (a phone
+without a camera, or with camera targeting turned off, chooses its target
+another way).
+
+A phone may send `aim_start` to several paired receivers at once (every screen
+nearby glows and shows its marker), read one marker, lock that receiver, and
+send `aim_end` to the others.
+
+`aim_end` hides glow and marker. A receiver MUST also hide them on `handoff`,
+on session end, and after **10 s** without a new `aim_start`.
+
+```mermaid
+sequenceDiagram
+    participant P as Phone
+    participant A as Screen A
+    participant B as Screen B
+    Note over P: raise detected
+    P->>A: aim_start
+    P->>B: aim_start
+    Note over A,B: glow + QR swipeto:<id>:<nonce>, nonce rotates every 2 s
+    Note over P: camera reads A's marker
+    P->>A: aim_start {nonce}
+    A-->>P: aim_ack {locked: true}
+    P->>B: aim_end
+    Note over A: locked glow
+    Note over P: swipe up
+    P->>A: handoff {...}
+```
 
 ### 5.4 Handoff
 

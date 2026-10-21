@@ -35,8 +35,12 @@ public interface IReceiverUi
     void ShowPairingCode(string code, string senderName);
     void HidePairingCode();
 
-    /// <summary>Show the edge glow and a QR marker encoding <paramref name="markerPayload"/>.</summary>
-    void ShowAim(string markerPayload);
+    /// <summary>
+    /// Show (or update) the edge glow and a QR marker encoding <paramref name="markerPayload"/>.
+    /// Called again every rotation with a new payload; <paramref name="locked"/> once a phone has
+    /// proved it read the marker.
+    /// </summary>
+    void ShowAim(string markerPayload, bool locked);
     void HideAim();
 }
 
@@ -57,6 +61,7 @@ public sealed class ReceiverOptions
     public int PairingAttempts { get; init; } = 3;
     public TimeSpan PairRequestInterval { get; init; } = TimeSpan.FromSeconds(5);
     public TimeSpan AimTimeout { get; init; } = TimeSpan.FromSeconds(10);
+    public TimeSpan MarkerRotation { get; init; } = TimeSpan.FromSeconds(2);
     public TimeSpan StateInterval { get; init; } = TimeSpan.FromSeconds(1);
 
     /// <summary>For automated tests only: always use this pairing code.</summary>

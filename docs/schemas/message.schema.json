@@ -14,6 +14,7 @@
         "hello_ack",
         "aim_start",
         "aim_end",
+        "aim_ack",
         "handoff",
         "handoff_ack",
         "control",
@@ -112,6 +113,18 @@
       },
       "then": {
         "$ref": "aim_end.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "aim_ack"
+          }
+        }
+      },
+      "then": {
+        "$ref": "aim_ack.schema.json"
       }
     },
     {

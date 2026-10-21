@@ -69,8 +69,8 @@ public sealed class ProtocolSession(Role localRole)
             (Role.Sender, SessionState.HandoffActive) => message is AimStart or AimEnd or Handoff or Control or PullbackRequest,
             (Role.Receiver, SessionState.Connected or SessionState.Paired) => message is HelloAck,
             (Role.Receiver, SessionState.Pairing) => message is PairResult,
-            (Role.Receiver, SessionState.Session) => message is HandoffAck or PlaybackState,
-            (Role.Receiver, SessionState.HandoffActive) => message is HandoffAck or PlaybackState or Pullback,
+            (Role.Receiver, SessionState.Session) => message is AimAck or HandoffAck or PlaybackState,
+            (Role.Receiver, SessionState.HandoffActive) => message is AimAck or HandoffAck or PlaybackState or Pullback,
             _ => false,
         };
     }

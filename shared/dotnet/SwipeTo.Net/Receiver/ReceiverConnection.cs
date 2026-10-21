@@ -19,6 +19,8 @@ internal sealed class ReceiverConnection
     private string? _pairingSenderName;
     private string? _senderName;
     private CancellationTokenSource? _aimTimeout;
+    private CancellationTokenSource? _markerRotation;
+    private bool _aimLocked;
     private CancellationTokenSource? _stateTicker;
 
     public ReceiverConnection(ReceiverHost host, WebSocket socket, ILogger log)
@@ -58,7 +60,7 @@ internal sealed class ReceiverConnection
         PairRequest m => OnPairRequestAsync(m),
         PairConfirm m => OnPairConfirmAsync(m),
         Hello m => OnHelloAsync(m),
-        AimStart => OnAimStartAsync(),
+        AimStart m => OnAimStartAsync(m),
         AimEnd => OnAimEndAsync(),
         Handoff m => OnHandoffAsync(m),
         Control m => OnControlAsync(m),
@@ -125,17 +127,41 @@ internal sealed class ReceiverConnection
         await _channel.SendAsync(new HelloAck(_options.ReceiverId, refusal is null, refusal) { ReplyTo = hello.Id });
     }
 
-    private Task OnAimStartAsync()
+    private async Task OnAimStartAsync(AimStart aim)
     {
-        // Phase 4 rotates and verifies the nonce; for now each aim gets a fresh one.
-        _host.Ui.ShowAim($"swipeto:{_options.ReceiverId}:{Secrets.Token(12)}");
+        if (aim.Nonce is { } nonce)
+        {
+            // The phone read our marker: confirm (or refuse) the lock.
+            var locked = _host.Markers.IsValid(nonce);
+            if (locked) _aimLocked = true;
+            _log.LogInformation("Aim lock {Outcome}", locked ? "confirmed" : "refused (stale or unknown nonce)");
+            await _channel.SendAsync(new AimAck(locked) { ReplyTo = aim.Id });
+        }
+
+        _host.Ui.ShowAim(_host.Markers.Payload(_options.ReceiverId), _aimLocked);
+        StartMarkerRotation();
         _aimTimeout?.Cancel();
         var timeout = _aimTimeout = new CancellationTokenSource();
         _ = Task.Delay(_options.AimTimeout, timeout.Token).ContinueWith(t =>
         {
-            if (!t.IsCanceled) _host.Ui.HideAim();
+            if (!t.IsCanceled) HideAim();
         }, TaskScheduler.Default);
-        return Task.CompletedTask;
+    }
+
+    /// <summary>A new marker nonce every rotation while the marker is up, so a photo of it goes stale.</summary>
+    private void StartMarkerRotation()
+    {
+        if (_markerRotation is not null) return;
+        var rotation = _markerRotation = new CancellationTokenSource();
+        _ = Task.Run(async () =>
+        {
+            using var timer = new PeriodicTimer(_options.MarkerRotation);
+            while (await timer.WaitForNextTickAsync(rotation.Token).ConfigureAwait(false))
+            {
+                _host.Markers.Rotate();
+                if (!rotation.IsCancellationRequested) _host.Ui.ShowAim(_host.Markers.Payload(_options.ReceiverId), _aimLocked);
+            }
+        }).ContinueWith(_ => { }, TaskScheduler.Default);
     }
 
     private Task OnAimEndAsync()
@@ -267,6 +293,9 @@ internal sealed class ReceiverConnection
     private void HideAim()
     {
         _aimTimeout?.Cancel();
+        _markerRotation?.Cancel();
+        _markerRotation = null;
+        _aimLocked = false;
         _host.Ui.HideAim();
     }
 

@@ -47,6 +47,7 @@ internal sealed class ReceiverConnection
         }
         finally
         {
+            _log.LogInformation("Session with {Sender} ended", _senderName ?? _pairingSenderName ?? "an unpaired sender");
             Cleanup();
             await _channel.DisposeAsync();
         }

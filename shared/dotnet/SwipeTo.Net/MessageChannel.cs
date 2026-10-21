@@ -6,19 +6,26 @@ using SwipeTo.Protocol;
 
 namespace SwipeTo.Net;
 
+/// <summary>Keepalive timings (docs/protocol.md, section 5.7). Tests shorten them.</summary>
+public sealed record ChannelTimings(TimeSpan PingInterval, TimeSpan SilenceTimeout, TimeSpan SendTimeout)
+{
+    public static readonly ChannelTimings Default = new(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(5));
+}
+
 /// <summary>
 /// One SwipeTo session over a WebSocket: text frames of JSON, checked against the
 /// <see cref="ProtocolSession"/> state machine in both directions. Answers <c>ping</c> itself, sends
 /// <c>ping</c> after 5 s of quiet, and closes after 15 s of silence (docs/protocol.md, section 5.7).
+/// A send that does not complete within <see cref="ChannelTimings.SendTimeout"/> drops the session:
+/// a stalled connection must never hold up the keepalive watchdog.
 /// </summary>
 public sealed class MessageChannel : IAsyncDisposable
 {
-    public static readonly TimeSpan PingInterval = TimeSpan.FromSeconds(5);
-    public static readonly TimeSpan SilenceTimeout = TimeSpan.FromSeconds(15);
     private const int MaxConsecutiveBadMessages = 3;
 
     private readonly WebSocket _socket;
     private readonly ILogger _log;
+    private readonly ChannelTimings _timings;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly CancellationTokenSource _closing = new();
     private readonly Task _keepalive;
@@ -26,10 +33,11 @@ public sealed class MessageChannel : IAsyncDisposable
     private long _lastReceivedTicks = Environment.TickCount64;
     private int _badMessages;
 
-    public MessageChannel(WebSocket socket, Role localRole, ILogger? log = null)
+    public MessageChannel(WebSocket socket, Role localRole, ILogger? log = null, ChannelTimings? timings = null)
     {
         _socket = socket;
         _log = log ?? NullLogger.Instance;
+        _timings = timings ?? ChannelTimings.Default;
         Session = new ProtocolSession(localRole);
         _keepalive = Task.Run(KeepaliveLoop);
     }
@@ -70,9 +78,14 @@ public sealed class MessageChannel : IAsyncDisposable
             }
             catch (Exception e) when (e is WebSocketException or ObjectDisposedException or OperationCanceledException && !ct.IsCancellationRequested)
             {
+                if (!_closing.IsCancellationRequested) _log.LogInformation("Connection lost: {Reason}", e.Message);
                 return null;
             }
-            if (frame is null) return null;
+            if (frame is null)
+            {
+                _log.LogInformation("Connection closed by the other side");
+                return null;
+            }
 
             Interlocked.Exchange(ref _lastReceivedTicks, Environment.TickCount64);
             Message message;
@@ -158,9 +171,10 @@ public sealed class MessageChannel : IAsyncDisposable
     }
 
     // Keepalive and error replies bypass Outgoing's state check: they are allowed in every state.
-    private async Task TrySendUncheckedAsync(Message message)
+    // With wait: false (pings) it gives up at once if another send holds the lock.
+    private async Task TrySendUncheckedAsync(Message message, bool wait = true)
     {
-        await _sendLock.WaitAsync();
+        if (!await _sendLock.WaitAsync(wait ? Timeout.Infinite : 0)) return;
         try
         {
             await SendRawAsync(message, _closing.Token);
@@ -178,8 +192,26 @@ public sealed class MessageChannel : IAsyncDisposable
     private async Task SendRawAsync(Message message, CancellationToken ct)
     {
         var bytes = Encoding.UTF8.GetBytes(MessageCodec.Serialize(message));
-        await _socket.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, ct);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(_timings.SendTimeout);
+        try
+        {
+            await _socket.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, timeout.Token);
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            _log.LogWarning("A send stalled for {Seconds} s, dropping the session", _timings.SendTimeout.TotalSeconds);
+            Drop();
+            throw new WebSocketException(WebSocketError.ConnectionClosedPrematurely, "Send timed out");
+        }
         Interlocked.Exchange(ref _lastSentTicks, Environment.TickCount64);
+    }
+
+    /// <summary>Ends the session at once, without a closing handshake.</summary>
+    private void Drop()
+    {
+        if (!_closing.IsCancellationRequested) _closing.Cancel();
+        _socket.Abort();
     }
 
     private async Task KeepaliveLoop()
@@ -188,18 +220,18 @@ public sealed class MessageChannel : IAsyncDisposable
         {
             while (!_closing.IsCancellationRequested)
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(500), _closing.Token);
+                await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(500, _timings.PingInterval.TotalMilliseconds / 2)), _closing.Token);
                 var now = Environment.TickCount64;
-                if (now - Interlocked.Read(ref _lastReceivedTicks) >= SilenceTimeout.TotalMilliseconds)
+                if (now - Interlocked.Read(ref _lastReceivedTicks) >= _timings.SilenceTimeout.TotalMilliseconds)
                 {
-                    _log.LogInformation("No message for {Seconds} s, dropping the session", SilenceTimeout.TotalSeconds);
-                    await CloseAsync("timeout");
-                    _socket.Abort();
+                    _log.LogInformation("No message for {Seconds} s, dropping the session", _timings.SilenceTimeout.TotalSeconds);
+                    Drop();
                     return;
                 }
-                if (now - Interlocked.Read(ref _lastSentTicks) >= PingInterval.TotalMilliseconds)
+                if (now - Interlocked.Read(ref _lastSentTicks) >= _timings.PingInterval.TotalMilliseconds)
                 {
-                    await TrySendUncheckedAsync(new Ping());
+                    // Never wait here: the watchdog above must keep running even if a send is stuck.
+                    _ = TrySendUncheckedAsync(new Ping(), wait: false);
                 }
             }
         }

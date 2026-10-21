@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SwipeTo talks to screens on the local network over plain ws:// and serves media over plain
+  http:// (protocol v1, docs/protocol.md section 6). Receiver addresses are discovered at run time,
+  so cleartext cannot be limited to fixed domains. Nothing leaves the LAN.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

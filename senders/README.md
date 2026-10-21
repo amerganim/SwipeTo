@@ -1,4 +1,4 @@
 # Senders
 
-- `android/` — Kotlin + Jetpack Compose sender. Phase 3, branch `android/*`.
+- `android/` — Kotlin + Jetpack Compose sender, see [`android/README.md`](android/README.md). Branch `android/*`.
 - `ios/` — Swift sender. Phase 7.

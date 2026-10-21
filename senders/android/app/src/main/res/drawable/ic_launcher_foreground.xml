@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A screen outline with an arrow swiping up into it. 108dp canvas, art inside the 72dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FF00B7FF"
+        android:strokeWidth="4"
+        android:pathData="M32,34 L76,34 Q80,34 80,38 L80,58 Q80,62 76,62 L32,62 Q28,62 28,58 L28,38 Q28,34 32,34 Z" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M54,80 L54,50 M44,60 L54,50 L64,60" />
+</vector>

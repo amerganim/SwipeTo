@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://swipeto.dev/schemas/v1/hello.schema.json",
+  "title": "hello",
+  "description": "Phone opens a session with a previously issued trust token.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/envelope"
+    }
+  ],
+  "properties": {
+    "type": {
+      "const": "hello"
+    },
+    "senderId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "senderName": {
+      "$ref": "common.schema.json#/$defs/deviceName"
+    },
+    "trustToken": {
+      "$ref": "common.schema.json#/$defs/trustToken"
+    },
+    "protocolVersion": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "required": [
+    "type",
+    "senderId",
+    "senderName",
+    "trustToken",
+    "protocolVersion"
+  ],
+  "unevaluatedProperties": false
+}

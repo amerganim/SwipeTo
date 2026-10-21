@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://swipeto.dev/schemas/v1/handoff_ack.schema.json",
+  "title": "handoff_ack",
+  "description": "Receiver accepts or refuses a handoff.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/envelope"
+    }
+  ],
+  "properties": {
+    "type": {
+      "const": "handoff_ack"
+    },
+    "accepted": {
+      "type": "boolean"
+    },
+    "reason": {
+      "$ref": "common.schema.json#/$defs/errorCode"
+    }
+  },
+  "required": [
+    "type",
+    "accepted"
+  ],
+  "unevaluatedProperties": false,
+  "if": {
+    "properties": {
+      "accepted": {
+        "const": false
+      }
+    }
+  },
+  "then": {
+    "required": [
+      "reason"
+    ]
+  }
+}

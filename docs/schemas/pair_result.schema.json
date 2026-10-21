@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://swipeto.dev/schemas/v1/pair_result.schema.json",
+  "title": "pair_result",
+  "description": "Receiver reports the pairing outcome. trustToken is present exactly when ok is true.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/envelope"
+    }
+  ],
+  "properties": {
+    "type": {
+      "const": "pair_result"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "trustToken": {
+      "$ref": "common.schema.json#/$defs/trustToken"
+    },
+    "reason": {
+      "enum": [
+        "wrong_code",
+        "code_expired",
+        "too_many_attempts",
+        "not_pairing"
+      ]
+    }
+  },
+  "required": [
+    "type",
+    "ok"
+  ],
+  "unevaluatedProperties": false,
+  "if": {
+    "properties": {
+      "ok": {
+        "const": true
+      }
+    }
+  },
+  "then": {
+    "required": [
+      "trustToken"
+    ],
+    "not": {
+      "required": [
+        "reason"
+      ]
+    }
+  },
+  "else": {
+    "required": [
+      "reason"
+    ],
+    "not": {
+      "required": [
+        "trustToken"
+      ]
+    }
+  }
+}

@@ -27,9 +27,14 @@ internal sealed class WinUiReceiverUi(DispatcherQueue ui, Func<string> receiverN
     /// <summary>UI thread: creates the overlay windows hidden.</summary>
     public void WarmUp() => _aim.WarmUp();
 
-    public void ShowAim(string markerPayload) => ui.TryEnqueue(async () =>
+    /// <summary>Called on aim_start and again every marker rotation (new QR) or lock (locked glow).</summary>
+    public void ShowAim(string markerPayload, bool locked) => ui.TryEnqueue(async () =>
     {
-        if (await _aim.ShowAsync(markerPayload, receiverName())) log.LogInformation("Aim glow and marker shown");
+        var wasVisible = _aim.IsVisible;
+        var wasLocked = _aim.IsLocked;
+        if (!await _aim.ShowAsync(markerPayload, receiverName(), locked)) return;
+        if (!wasVisible) log.LogInformation("Aim glow and marker shown");
+        if (locked && !wasLocked) log.LogInformation("Aim locked");
     });
 
     public void HideAim() => ui.TryEnqueue(() =>

@@ -23,11 +23,15 @@ internal sealed partial class AimOverlay : IDisposable
     private const int MarkerMargin = 40;
     private const int CaptionHeight = 30;
     private static readonly Color Accent = Color.FromArgb(0x00, 0xB7, 0xFF);
+    private static readonly Color LockedAccent = Color.FromArgb(0x3D, 0xFF, 0x9A);
 
     private nint _hwnd;
     private int _generation;
 
     public bool IsVisible { get; private set; }
+
+    /// <summary>A phone proved it read the marker: brighter, green, wider glow.</summary>
+    public bool IsLocked { get; private set; }
 
     /// <summary>UI thread. Creates the window hidden so the first aim shows instantly.</summary>
     public void WarmUp() => EnsureWindow();
@@ -36,19 +40,20 @@ internal sealed partial class AimOverlay : IDisposable
     /// UI thread. Rendering runs on a worker, so a <see cref="Hide"/> can arrive meanwhile; then
     /// nothing is shown. Returns whether the overlay was shown.
     /// </summary>
-    public async Task<bool> ShowAsync(string payload, string receiverName)
+    public async Task<bool> ShowAsync(string payload, string receiverName, bool locked = false)
     {
         var generation = ++_generation;
         EnsureWindow();
         var area = DisplayArea.Primary.OuterBounds;
         var scale = GetDpiForWindow(_hwnd) / 96.0;
-        using var frame = await Task.Run(() => Render(area.Width, area.Height, scale, payload, receiverName));
+        using var frame = await Task.Run(() => Render(area.Width, area.Height, scale, payload, receiverName, locked));
         if (generation != _generation) return false;
 
         Present(frame, area.X, area.Y);
         ShowWindow(_hwnd, SwShowNoActivate);
         SetWindowPos(_hwnd, HwndTopmost, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate);
         IsVisible = true;
+        IsLocked = locked;
         return true;
     }
 
@@ -58,6 +63,7 @@ internal sealed partial class AimOverlay : IDisposable
         _generation++;
         if (_hwnd != 0) ShowWindow(_hwnd, SwHide);
         IsVisible = false;
+        IsLocked = false;
     }
 
     public void Dispose()
@@ -84,7 +90,7 @@ internal sealed partial class AimOverlay : IDisposable
     }
 
     /// <summary>ARGB frame (GetHbitmap premultiplies it for UpdateLayeredWindow): edge glow plus the marker card.</summary>
-    private static Bitmap Render(int width, int height, double scale, string payload, string receiverName)
+    private static Bitmap Render(int width, int height, double scale, string payload, string receiverName, bool locked)
     {
         var frame = new Bitmap(width, height, PixelFormat.Format32bppArgb);
         using var g = Graphics.FromImage(frame);
@@ -92,11 +98,12 @@ internal sealed partial class AimOverlay : IDisposable
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
         // Glow: nested rectangles whose alpha falls off quadratically towards the inside.
-        var glow = (int)(GlowThickness * scale);
+        var glow = (int)(GlowThickness * scale * (locked ? 1.6 : 1));
+        var color = locked ? LockedAccent : Accent;
         for (var i = 0; i < glow; i++)
         {
             var t = 1 - (double)i / glow;
-            using var pen = new Pen(Color.FromArgb((int)(230 * t * t), Accent), 1);
+            using var pen = new Pen(Color.FromArgb((int)(240 * t * t), color), 1);
             g.DrawRectangle(pen, i, i, width - 1 - 2 * i, height - 1 - 2 * i);
         }
 
@@ -122,7 +129,7 @@ internal sealed partial class AimOverlay : IDisposable
         using (var format = new StringFormat { Alignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter })
         {
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-            g.DrawString($"SwipeTo · {receiverName}", font, ink, new RectangleF(card.X, card.Bottom - caption - (int)(6 * scale), card.Width, caption), format);
+            g.DrawString(locked ? $"✓ {receiverName}" : $"SwipeTo · {receiverName}", font, ink, new RectangleF(card.X, card.Bottom - caption - (int)(6 * scale), card.Width, caption), format);
         }
         return frame;
     }

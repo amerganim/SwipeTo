@@ -143,7 +143,11 @@ Receiver rules:
   **3** attempts. A new `pair_request` replaces any code in progress.
 - `wrong_code` keeps the code valid (attempts permitting); `code_expired` and
   `too_many_attempts` end pairing and return to *Connected*. `pair_confirm`
-  outside pairing gets `not_pairing`.
+  outside *Pairing* is a state error (`error {code: "bad_message"}`);
+  `not_pairing` is for a receiver that is in *Pairing* but has dropped its code
+  (for example, the user dismissed it on screen).
+- A repeated `pair_request` inside the rate-limit window keeps the code already
+  on screen instead of issuing a new one.
 - `trustToken` is at least **128 bits** from a CSPRNG, encoded base64url without
   padding (22–128 chars). The receiver stores it against `senderId` and
   `senderName`; the sender stores it against the receiver `id`.
@@ -265,6 +269,9 @@ sequenceDiagram
 - When the user closes playback on the receiver (Esc / close button), the
   receiver sends `state {ended: true, playing: false}` and returns to *Session*.
 - `control` outside *HandoffActive* gets `error {code: "bad_message"}`.
+- `handoff_ack` is sent before the media loads, so the first `state` after it is
+  the signal that playback has started. A receiver MAY ignore `control` that
+  arrives before that first `state`; senders SHOULD wait for it.
 
 ```mermaid
 sequenceDiagram

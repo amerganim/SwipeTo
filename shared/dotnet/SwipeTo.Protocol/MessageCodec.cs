@@ -62,7 +62,8 @@ public static partial class MessageCodec
             MessageTypes.Hello => new Hello(
                 f.Uuid("senderId"), f.DeviceName("senderName"), f.Matching("trustToken", TrustTokenPattern()), ParseVersion(f)),
             MessageTypes.HelloAck => new HelloAck(f.Uuid("receiverId"), f.Bool("accepted"), f.OptionalEnum<ErrorCode>("reason")),
-            MessageTypes.AimStart => new AimStart(),
+            MessageTypes.AimStart => new AimStart(f.OptionalMatching("nonce", MarkerNoncePattern())),
+            MessageTypes.AimAck => new AimAck(f.Bool("locked")),
             MessageTypes.AimEnd => new AimEnd(),
             MessageTypes.Handoff => new Handoff(ParseMedia(f.Object("media")), f.Integer("positionMs"), f.Bool("playing")),
             MessageTypes.HandoffAck => new HandoffAck(f.Bool("accepted"), f.OptionalEnum<ErrorCode>("reason")),
@@ -197,7 +198,13 @@ public static partial class MessageCodec
                 w.WriteString("code", WireEnum.ToWire(m.Code));
                 w.WriteString("message", m.Description);
                 break;
-            case AimStart or AimEnd or PullbackRequest or Ping or Pong:
+            case AimStart m:
+                if (m.Nonce is not null) w.WriteString("nonce", m.Nonce);
+                break;
+            case AimAck m:
+                w.WriteBoolean("locked", m.Locked);
+                break;
+            case AimEnd or PullbackRequest or Ping or Pong:
                 break;
             default:
                 throw new ArgumentException($"Unknown message record {message.GetType().Name}", nameof(message));
@@ -211,6 +218,9 @@ public static partial class MessageCodec
 
     [GeneratedRegex("^[A-Za-z0-9_-]{22,128}$")]
     internal static partial Regex TrustTokenPattern();
+
+    [GeneratedRegex("^[A-Za-z0-9_-]{16,64}$")]
+    internal static partial Regex MarkerNoncePattern();
 
     [GeneratedRegex("^[0-9]{6}$")]
     internal static partial Regex PairCodePattern();

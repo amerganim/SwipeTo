@@ -11,6 +11,7 @@ object MessageTypes {
     const val HELLO_ACK = "hello_ack"
     const val AIM_START = "aim_start"
     const val AIM_END = "aim_end"
+    const val AIM_ACK = "aim_ack"
     const val HANDOFF = "handoff"
     const val HANDOFF_ACK = "handoff_ack"
     const val CONTROL = "control"
@@ -22,7 +23,7 @@ object MessageTypes {
     const val ERROR = "error"
 
     val ALL = listOf(
-        PAIR_REQUEST, PAIR_CONFIRM, PAIR_RESULT, HELLO, HELLO_ACK, AIM_START, AIM_END, HANDOFF,
+        PAIR_REQUEST, PAIR_CONFIRM, PAIR_RESULT, HELLO, HELLO_ACK, AIM_START, AIM_END, AIM_ACK, HANDOFF,
         HANDOFF_ACK, CONTROL, STATE, PULLBACK_REQUEST, PULLBACK, PING, PONG, ERROR,
     )
 }
@@ -107,12 +108,24 @@ data class HelloAck(
     override val type get() = MessageTypes.HELLO_ACK
 }
 
+/** With [nonce]: the marker nonce the phone's camera read, asking the receiver to confirm the lock. */
 data class AimStart(
+    val nonce: String? = null,
     override val id: String = newMessageId(),
     override val ts: Long = nowMs(),
     override val replyTo: String? = null,
 ) : Message() {
     override val type get() = MessageTypes.AIM_START
+}
+
+/** Answer to an `aim_start` with a nonce: locked if it is the receiver's current or previous marker nonce. */
+data class AimAck(
+    val locked: Boolean,
+    override val id: String = newMessageId(),
+    override val ts: Long = nowMs(),
+    override val replyTo: String? = null,
+) : Message() {
+    override val type get() = MessageTypes.AIM_ACK
 }
 
 data class AimEnd(

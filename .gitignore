@@ -1,0 +1,38 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+TestResults/
+*.binlog
+
+# Android / Gradle / Kotlin
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# macOS / iOS / Xcode
+.DS_Store
+DerivedData/
+xcuserdata/
+*.xcuserstate
+Pods/
+
+# Node / Python tooling
+node_modules/
+__pycache__/
+.venv/
+
+# Logs and local media
+*.log
+tools/**/sample-media/*.mp4

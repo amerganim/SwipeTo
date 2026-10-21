@@ -25,6 +25,8 @@ public sealed class HttpRangeStream : Stream
     private readonly object _gate = new();
     private readonly CancellationTokenSource _disposed = new();
     private long _position;
+    private long _bytesFetched;
+    private int _requests = 1;
 
     private HttpRangeStream(HttpClient http, Uri url, long length, int blockSize, byte[] firstBlock)
     {
@@ -32,6 +34,7 @@ public sealed class HttpRangeStream : Stream
         _url = url;
         Length = length;
         _blockSize = blockSize;
+        _bytesFetched = firstBlock.Length;
         Remember(0, Task.FromResult(firstBlock));
     }
 
@@ -53,6 +56,12 @@ public sealed class HttpRangeStream : Stream
         _ = Block(offset / _blockSize);
         _ = Block(offset / _blockSize + 1);
     }
+
+    /// <summary>Bytes downloaded so far, including read-ahead; for diagnosing slow starts.</summary>
+    public long BytesFetched => Interlocked.Read(ref _bytesFetched);
+
+    /// <summary>Range requests made so far.</summary>
+    public int Requests => Volatile.Read(ref _requests);
 
     public override bool CanRead => true;
     public override bool CanSeek => true;
@@ -154,8 +163,10 @@ public sealed class HttpRangeStream : Stream
 
     private async Task<byte[]> FetchAsync(long from, long to)
     {
+        Interlocked.Increment(ref _requests);
         using var response = await GetRangeAsync(_http, _url, from, to, _disposed.Token);
         var data = await response.Content.ReadAsByteArrayAsync(_disposed.Token);
+        Interlocked.Add(ref _bytesFetched, data.Length);
         return data.Length == to - from + 1 ? data : throw new IOException($"Expected {to - from + 1} bytes at {from}, got {data.Length}");
     }
 

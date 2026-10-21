@@ -144,7 +144,8 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
             if (s.PlaybackState == MediaPlaybackState.Playing && clock.IsRunning)
             {
                 clock.Stop();
-                log.LogInformation("First frame playing {Ms} ms after handoff at {Position} ms", clock.ElapsedMilliseconds, (long)s.Position.TotalMilliseconds);
+                log.LogInformation("First frame playing {Ms} ms after handoff at {Position} ms ({KiB} KiB in {Requests} range requests)",
+                    clock.ElapsedMilliseconds, (long)s.Position.TotalMilliseconds, stream.BytesFetched / 1024, stream.Requests);
             }
             if (!IsCurrent(player)) return;
             if (s.PlaybackState == MediaPlaybackState.Playing) Reveal();

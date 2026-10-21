@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Description>SwipeTo protocol v1: message models, strict JSON codec and session state machine. No platform or network code.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SwipeTo.Protocol.Tests" />
+  </ItemGroup>
+
+</Project>

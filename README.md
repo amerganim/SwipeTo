@@ -22,8 +22,8 @@ Each phase lands through its own pull request.
 
 | Phase | Goal | State |
 |---|---|---|
-| 0 | Repo + protocol spec | in review |
-| 1 | Shared protocol libraries + mock tools | — |
+| 0 | Repo + protocol spec | done (#1) |
+| 1 | Shared protocol libraries + mock tools | in review |
 | 2 | Windows receiver MVP | — |
 | 3 | Android sender MVP | — |
 | 4 | Gesture + pointing | — |

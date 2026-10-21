@@ -20,6 +20,7 @@ object MessageCodec {
     private val UUID = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
     private val TRUST_TOKEN = Regex("^[A-Za-z0-9_-]{22,128}$")
     private val PAIR_CODE = Regex("^[0-9]{6}$")
+    private val MARKER_NONCE = Regex("^[A-Za-z0-9_-]{16,64}$")
     private val URL = Regex("^https?://[^\\s]+$")
     private val MIME = Regex("^(video|image)/[A-Za-z0-9.+-]+$")
 
@@ -58,7 +59,8 @@ object MessageCodec {
             MessageTypes.HELLO_ACK -> HelloAck(
                 f.matching("receiverId", UUID), f.bool("accepted"), f.optionalEnum<ErrorCode>("reason"), id, ts, replyTo,
             )
-            MessageTypes.AIM_START -> AimStart(id, ts, replyTo)
+            MessageTypes.AIM_START -> AimStart(f.optionalMatching("nonce", MARKER_NONCE), id, ts, replyTo)
+            MessageTypes.AIM_ACK -> AimAck(f.bool("locked"), id, ts, replyTo)
             MessageTypes.AIM_END -> AimEnd(id, ts, replyTo)
             MessageTypes.HANDOFF -> Handoff(parseMedia(f.obj("media")), f.integer("positionMs"), f.bool("playing"), id, ts, replyTo)
             MessageTypes.HANDOFF_ACK -> HandoffAck(f.bool("accepted"), f.optionalEnum<ErrorCode>("reason"), id, ts, replyTo)
@@ -178,7 +180,9 @@ object MessageCodec {
                 put("code", message.code.wire)
                 put("message", message.description)
             }
-            is AimStart, is AimEnd, is PullbackRequest, is Ping, is Pong -> Unit
+            is AimStart -> message.nonce?.let { put("nonce", it) }
+            is AimAck -> put("locked", message.locked)
+            is AimEnd, is PullbackRequest, is Ping, is Pong -> Unit
         }
     }
 

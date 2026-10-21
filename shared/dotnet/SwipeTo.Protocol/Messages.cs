@@ -10,6 +10,7 @@ public static class MessageTypes
     public const string HelloAck = "hello_ack";
     public const string AimStart = "aim_start";
     public const string AimEnd = "aim_end";
+    public const string AimAck = "aim_ack";
     public const string Handoff = "handoff";
     public const string HandoffAck = "handoff_ack";
     public const string Control = "control";
@@ -71,9 +72,16 @@ public sealed record HelloAck(string ReceiverId, bool Accepted, ErrorCode? Reaso
     public override string Type => MessageTypes.HelloAck;
 }
 
-public sealed record AimStart : Message
+/// <summary>With <see cref="Nonce"/>: the marker nonce the phone's camera read, asking the receiver to confirm the lock.</summary>
+public sealed record AimStart(string? Nonce = null) : Message
 {
     public override string Type => MessageTypes.AimStart;
+}
+
+/// <summary>Answer to an <c>aim_start</c> with a nonce: locked if it is the receiver's current or previous marker nonce.</summary>
+public sealed record AimAck(bool Locked) : Message
+{
+    public override string Type => MessageTypes.AimAck;
 }
 
 public sealed record AimEnd : Message

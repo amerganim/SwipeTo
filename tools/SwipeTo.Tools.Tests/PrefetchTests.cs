@@ -122,6 +122,27 @@ public sealed class PrefetchTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task App_content_opens_when_the_screen_can_find_it_and_is_refused_otherwise()
+    {
+        var found = MediaInfo.App("youtube", "Big Buck Bunny", channel: "Blender");
+        Assert.True((await _client.HandoffAsync(found, 127_503, playing: true)).Accepted);
+        var state = await _client.WaitForStateAsync(s => s.Playing);
+        Assert.InRange(state.PositionMs, 127_503, 130_000);
+        Assert.Equal(found.Key, _receiver.Playback.CurrentUrl);
+        Assert.Empty(_receiver.Playback.RangeResponses); // nothing fetched from the phone
+
+        // Same content again (a reconnect): re-attached, not looked up or reopened.
+        Assert.True((await _client.HandoffAsync(found, 128_000, playing: true)).Accepted);
+
+        var unknown = await _client.HandoffAsync(MediaInfo.App("youtube", "something unknown"), 0, playing: true);
+        Assert.False(unknown.Accepted);
+        Assert.Equal(ErrorCode.ServiceUnavailable, unknown.Reason);
+
+        var noService = await _client.HandoffAsync(MediaInfo.App("spotify", "A song"), 0, playing: true);
+        Assert.Equal(ErrorCode.ServiceUnavailable, noService.Reason);
+    }
+
+    [Fact]
     public async Task Album_handoffs_carry_their_transition()
     {
         var photo = new MediaInfo(MediaKind.Image, _media.Register(_file, "image/jpeg", IPAddress.Loopback), "image/jpeg", "IMG_1");

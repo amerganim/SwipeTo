@@ -18,6 +18,8 @@
   <ItemGroup>
     <Using Include="Xunit" />
     <ProjectReference Include="..\..\..\tools\mock-sender\SwipeTo.MockSender.csproj" />
+    <!-- Plain .NET pieces of the receiver, unit-tested without launching it. -->
+    <Compile Include="..\SwipeTo.Receiver.Windows\Services\YouTubeLookup.cs" Link="Linked\YouTubeLookup.cs" />
   </ItemGroup>
 
 </Project>

@@ -24,6 +24,7 @@ for (var i = 0; i < args.Length; i++)
         "--pair-code" => options with { PairingCode = Next() },
         "--trust-file" => options with { TrustFile = Next() },
         "--no-mdns" => options with { Advertise = false },
+        "--services" => options with { Services = Next() },
         _ => null!,
     };
     if (options is null)

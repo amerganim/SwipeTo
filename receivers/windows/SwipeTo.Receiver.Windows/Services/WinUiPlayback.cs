@@ -13,8 +13,18 @@ namespace SwipeTo.Receiver.Windows.Services;
 /// Plays handed-off media in the full-screen <see cref="PlayerWindow"/> with the Windows media
 /// pipeline. Window work runs on the UI thread; <see cref="MediaPlayer"/> itself is free-threaded.
 /// </summary>
-internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger log) : IPlaybackTarget
+internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, YouTubeLookup youTube, ILogger log) : IPlaybackTarget
 {
+    /// <summary>App content resolved before handoff_ack: media key to YouTube video id.</summary>
+    private readonly Dictionary<string, string> _resolved = new(StringComparer.Ordinal);
+
+    /// <summary>YouTube's player has the current media (instead of a MediaPlayer or a photo).</summary>
+    private bool _app;
+    private YouTubeStatus _yt;
+    private readonly Stopwatch _ytSince = new();
+    private Stopwatch? _ytFirstFrame;
+    private string? _ytVideo;
+
     private static readonly TimeSpan OpenTimeout = TimeSpan.FromSeconds(15);
 
     /// <summary>A playing prefetch this close to the phone's position is moved only if it drifts further.</summary>
@@ -22,6 +32,9 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
 
     /// <summary>A playing prefetch this close to the handoff position is shown without a seek.</summary>
     private const long WarmToleranceMs = 400;
+
+    /// <summary>How long the last frame stays after a video ends.</summary>
+    private const int EndLingerMs = 2_000;
     private static readonly HashSet<string> ImageTypes = ["image/jpeg", "image/png", "image/gif", "image/bmp", "image/webp", "image/tiff"];
     /// <summary>
     /// For the phone's media server. Fails fast so <see cref="HttpRangeStream"/> retries soon: after a
@@ -58,6 +71,19 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
     /// </summary>
     public void WarmUp()
     {
+        ui.TryEnqueue(async () =>
+        {
+            try
+            {
+                var clock = Stopwatch.StartNew();
+                await EnsureWindow().YouTube.WarmUpAsync();
+                log.LogInformation("YouTube player warmed up in {Ms} ms", clock.ElapsedMilliseconds);
+            }
+            catch (Exception e)
+            {
+                log.LogWarning("YouTube player warm-up failed (first YouTube handoff will be slower): {Error}", e.Message);
+            }
+        });
         EnsureWindow();
         _ = Task.Run(WarmUpPipelineAsync);
     }
@@ -90,8 +116,25 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
     {
         MediaKind.Video => media.Mime.StartsWith("video/", StringComparison.Ordinal),
         MediaKind.Image => ImageTypes.Contains(media.Mime),
+        // With its id YouTube needs nothing else; by title and channel it needs the user's API key.
+        MediaKind.App => media.Service switch
+        {
+            "youtube" => media.ContentId is not null || youTube.HasKey,
+            "web" => media.Url.StartsWith("https://", StringComparison.Ordinal),
+            _ => false,
+        },
         _ => false,
     };
+
+    public async Task<bool> ResolveAppAsync(MediaInfo media, CancellationToken ct)
+    {
+        if (media.Service == "web") return true;
+        if (media.Service != "youtube") return false;
+        var id = media.ContentId ?? await youTube.FindAsync(media.Title, media.Channel, ct);
+        if (id is null) return false;
+        lock (_resolved) _resolved[media.Key] = id;
+        return true;
+    }
 
     public string? CurrentUrl
     {
@@ -149,6 +192,19 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
     public async Task LoadAsync(MediaInfo media, long positionMs, bool playing, Transition? transition, CancellationToken ct)
     {
         var clock = Stopwatch.StartNew();
+
+        if (media.Service == "web")
+        {
+            OpenInBrowser(media);
+            return;
+        }
+
+        if (media.IsApp)
+        {
+            await LoadYouTubeAsync(media, positionMs, playing);
+            log.LogInformation("YouTube player up after {Ms} ms at {Position} ms", clock.ElapsedMilliseconds, positionMs);
+            return;
+        }
 
         if (media.Kind == MediaKind.Image)
         {
@@ -284,6 +340,7 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
                 _wantPlaying = false;
             }
             RaiseChanged();
+            CloseAfterEnd();
         };
         player.MediaFailed += (_, e) =>
         {
@@ -308,8 +365,112 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
         log.LogInformation("Video window up after {Shown} ms, media opened after {Opened} ms, at {Position} ms", shownMs, openedMs, positionMs);
     }
 
+    /// <summary>
+    /// A web page (a video on any site): opened in the default browser, which plays it from the site
+    /// itself. No remote control is possible there, so playback here counts as over at once and the
+    /// phone is told it opened (docs/protocol.md, 5.4).
+    /// </summary>
+    private void OpenInBrowser(MediaInfo media)
+    {
+        DiscardPrefetch();
+        ui.TryEnqueue(() =>
+        {
+            ReleasePlayer();
+            if (_window?.IsShown == true) _window.HideAndReset();
+        });
+        Process.Start(new ProcessStartInfo(media.Url) { UseShellExecute = true });
+        lock (_gate)
+        {
+            _ended = true;
+            _wantPlaying = false;
+            _currentUrl = null;
+        }
+        log.LogInformation("Opened {Url} in the browser", media.Url);
+        RaiseChanged();
+    }
+
+    /// <summary>App content: YouTube's own player shows it; we only say which video, where and whether to play.</summary>
+    private async Task LoadYouTubeAsync(MediaInfo media, long positionMs, bool playing)
+    {
+        string? id;
+        lock (_resolved) _resolved.TryGetValue(media.Key, out id);
+        id ??= media.ContentId ?? throw new InvalidOperationException("YouTube content was not resolved before the handoff");
+        DiscardPrefetch();
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ui.TryEnqueue(async () =>
+        {
+            try
+            {
+                ReleasePlayer();
+                var window = EnsureWindow();
+                window.ShowYouTube(media.Title);
+                lock (_gate)
+                {
+                    _app = true;
+                    _ytVideo = id;
+                    _yt = new YouTubeStatus(positionMs, YouTubeStatus.Unstarted, null);
+                    _ytSince.Restart();
+                    _ytFirstFrame = Stopwatch.StartNew();
+                    _ended = false;
+                    _wantPlaying = playing;
+                    _lastPositionMs = positionMs;
+                    _currentUrl = media.Key;
+                }
+                await window.YouTube.LoadAsync(id, positionMs, playing);
+                done.SetResult();
+            }
+            catch (Exception e)
+            {
+                done.TrySetException(e);
+            }
+        });
+        await done.Task;
+    }
+
+    /// <summary>UI thread: a report from YouTube's player.</summary>
+    private void OnYouTubeStatus(YouTubeStatus status)
+    {
+        bool changed;
+        lock (_gate)
+        {
+            if (!_app) return;
+            changed = status.State != _yt.State;
+            _yt = status;
+            _ytSince.Restart();
+            _lastPositionMs = status.PositionMs;
+        }
+        if (status.State == YouTubeStatus.Playing && _ytFirstFrame is { } first)
+        {
+            _ytFirstFrame = null;
+            log.LogInformation("First frame playing {Ms} ms after handoff at {Position} ms, YouTube {Video}", first.ElapsedMilliseconds, status.PositionMs, _ytVideo);
+        }
+        if (status.Error is { } error)
+        {
+            // 101/150: the owner does not allow embedding; open it on YouTube's site instead, at the same second.
+            log.LogWarning("YouTube player error {Error} for {Video}", error, _ytVideo);
+            if (error is 101 or 150 && _ytVideo is { } video)
+            {
+                var url = $"https://www.youtube.com/watch?v={video}&t={_lastPositionMs / 1000}s";
+                Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            }
+            EndPlayback("after a YouTube error");
+            return;
+        }
+        if (status.State == YouTubeStatus.Ended)
+        {
+            lock (_gate)
+            {
+                _ended = true;
+                _wantPlaying = false;
+            }
+            CloseAfterEnd();
+        }
+        if (changed) RaiseChanged();
+    }
+
     public void Play()
     {
+        if (IsApp(() => _ = _window!.YouTube.PlayAsync(), wantPlaying: true)) return;
         lock (_gate)
         {
             if (_player is null || _ended) return;
@@ -321,6 +482,7 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
 
     public void Pause()
     {
+        if (IsApp(() => _ = _window!.YouTube.PauseAsync(), wantPlaying: false)) return;
         lock (_gate)
         {
             if (_player is null) return;
@@ -332,6 +494,7 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
 
     public void Seek(long positionMs)
     {
+        if (IsApp(() => _ = _window!.YouTube.SeekAsync(positionMs), position: positionMs)) return;
         lock (_gate)
         {
             if (_player is null) return;
@@ -349,12 +512,38 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
 
     public void HideNotice() => ui.TryEnqueue(() => _window?.HideNotice());
 
+    /// <summary>For app content: runs <paramref name="command"/> on YouTube's player (UI thread) and notes the intent.</summary>
+    private bool IsApp(Action command, bool? wantPlaying = null, long? position = null)
+    {
+        lock (_gate)
+        {
+            if (!_app || _ended) return _app;
+            if (wantPlaying is { } want) _wantPlaying = want;
+            if (position is { } p)
+            {
+                _yt = _yt with { PositionMs = p };
+                _ytSince.Restart();
+            }
+        }
+        ui.TryEnqueue(() => command());
+        RaiseChanged();
+        return true;
+    }
+
     public PlaybackSnapshot Snapshot
     {
         get
         {
             lock (_gate)
             {
+                if (_app)
+                {
+                    var playingNow = _yt.State == YouTubeStatus.Playing;
+                    var position = _yt.PositionMs + (playingNow ? _ytSince.ElapsedMilliseconds : 0);
+                    _lastPositionMs = position;
+                    var want = _wantPlaying && !_ended;
+                    return new PlaybackSnapshot(position, want, _ended, Buffering: want && !playingNow);
+                }
                 var showing = false;
                 if (_player is not null)
                 {
@@ -383,8 +572,9 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
     private PlayerWindow EnsureWindow()
     {
         if (_window is not null) return _window;
-        _window = new PlayerWindow();
+        _window = new PlayerWindow(dataDir);
         _window.ViewerClosed += () => EndPlayback("by the viewer");
+        _window.YouTube.Status += OnYouTubeStatus;
         return _window;
     }
 
@@ -402,6 +592,23 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
         }
         log.LogInformation("Player closed {By} at {Position} ms", by, _lastPositionMs);
         RaiseChanged();
+    }
+
+    /**
+     * The video finished: leave the last frame up a moment, then close, unless something new was handed
+     * off meanwhile. (Before, the last frame stayed until someone pressed Esc: seen on the A15 test run.)
+     */
+    private void CloseAfterEnd()
+    {
+        string? ended;
+        lock (_gate) ended = _currentUrl;
+        ui.TryEnqueue(async () =>
+        {
+            await Task.Delay(EndLingerMs);
+            bool still;
+            lock (_gate) still = _ended && _currentUrl == ended;
+            if (still) EndPlayback("at the end");
+        });
     }
 
     private PrefetchedVideo? TakePrefetch(string url)
@@ -477,6 +684,7 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
 
     private void ReleasePlayer()
     {
+        lock (_gate) _app = false;
         MediaPlayer? player;
         HttpRangeStream? stream;
         lock (_gate)

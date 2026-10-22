@@ -35,6 +35,10 @@ public partial class App : Application
         _options = options;
         _dataDir = options.DataDir ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SwipeTo", "Receiver");
         _settings = ReceiverSettings.Load(_dataDir);
+        // YouTube's player (WebView2) starts with sound when handed a video, without a click on the
+        // screen; its browser data stays with the receiver's data.
+        Environment.SetEnvironmentVariable("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--autoplay-policy=no-user-gesture-required");
+        Environment.SetEnvironmentVariable("WEBVIEW2_USER_DATA_FOLDER", Path.Combine(_dataDir, "webview"));
         if (options.Name is { } name) _settings.Name = name;
         _fileLogs = new FileLoggerProvider(Path.Combine(_dataDir, "logs"));
         _logs = LoggerFactory.Create(b => b.AddProvider(_fileLogs).SetMinimumLevel(LogLevel.Information));
@@ -55,7 +59,7 @@ public partial class App : Application
 
         if (!_settings.FirstRunDone && !_options.Background && _options.PairingCode is null)
         {
-            new FirstRunWindow(_settings.Name, RenameAsync, _host?.Trust, firstRun: true).Activate();
+            new FirstRunWindow(_settings.Name, RenameAsync, _host?.Trust, firstRun: true, YouTubeKey()).Activate();
             _settings.FirstRunDone = true;
             _settings.Save(_dataDir);
         }
@@ -63,7 +67,8 @@ public partial class App : Application
 
     private async Task StartHostAsync()
     {
-        var playback = new WinUiPlayback(_ui, _dataDir, _logs.CreateLogger<WinUiPlayback>());
+        var youTube = new YouTubeLookup(new HttpClient { Timeout = TimeSpan.FromSeconds(6) }, () => _settings.YouTubeKey);
+        var playback = new WinUiPlayback(_ui, _dataDir, youTube, _logs.CreateLogger<WinUiPlayback>());
         var ui = new WinUiReceiverUi(_ui, () => _settings.Name, _logs.CreateLogger<WinUiReceiverUi>(), _options.MarkerLeft);
         playback.WarmUp();
         ui.WarmUp();
@@ -76,6 +81,7 @@ public partial class App : Application
                 Port = _options.Port ?? ReceiverOptions.DefaultPort,
                 FixedPairingCode = _options.PairingCode,
                 Advertise = !_options.NoAdvertise,
+                Services = "youtube,web",
             },
             playback,
             ui,
@@ -151,7 +157,15 @@ public partial class App : Application
         SetStatus(_status);
     }
 
-    private void ShowSettings() => new FirstRunWindow(_settings.Name, RenameAsync, _host?.Trust, firstRun: false).Activate();
+    private void ShowSettings() => new FirstRunWindow(_settings.Name, RenameAsync, _host?.Trust, firstRun: false, YouTubeKey()).Activate();
+
+    /// <summary>Read and change the YouTube API key from Settings (stored encrypted).</summary>
+    private (bool Has, Action<string?> Set) YouTubeKey() => (_settings.YouTubeKey is not null, key =>
+    {
+        _settings.YouTubeKey = key;
+        _settings.Save(_dataDir);
+        _log.LogInformation("YouTube API key {Change}", key is null ? "removed" : "saved");
+    });
 
     private void SetStatus(string status)
     {

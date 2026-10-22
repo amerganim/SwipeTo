@@ -14,6 +14,9 @@ public sealed record MockReceiverOptions
     public bool Advertise { get; init; } = true;
     public LogLevel LogLevel { get; init; } = LogLevel.Information;
     public TimeSpan MarkerRotation { get; init; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>Services whose app content this pretend screen "opens" (svcs), e.g. "youtube".</summary>
+    public string Services { get; init; } = "youtube";
 }
 
 /// <summary>A console "screen": shows the pairing code and aim marker as text, simulates playback.</summary>
@@ -25,7 +28,7 @@ public sealed class MockReceiverApp : IAsyncDisposable, IReceiverUi
     private MockReceiverApp(MockReceiverOptions options)
     {
         _logs = LoggerFactory.Create(b => b.AddSimpleConsole(o => o.SingleLine = true).SetMinimumLevel(options.LogLevel));
-        Playback = new SimulatedPlayback(_http);
+        Playback = new SimulatedPlayback(_http, options.Services.Split(',', StringSplitOptions.RemoveEmptyEntries).ToHashSet());
         var dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SwipeTo", "mock-receiver");
         Host = new ReceiverHost(
             new ReceiverOptions
@@ -37,6 +40,7 @@ public sealed class MockReceiverApp : IAsyncDisposable, IReceiverUi
                 Advertise = options.Advertise,
                 FixedPairingCode = options.PairingCode,
                 MarkerRotation = options.MarkerRotation,
+                Services = options.Services,
             },
             Playback,
             this,

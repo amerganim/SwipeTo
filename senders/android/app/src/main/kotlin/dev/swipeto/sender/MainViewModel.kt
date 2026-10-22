@@ -263,11 +263,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 return false
             }
         }
-        val (target, conn) = aim.takeTarget() ?: return false
+        val (target, conn) = aim.takeTarget() ?: run {
+            Log.i(TAG, "swipe up: the aimed connection is gone")
+            _hints.tryEmit("Lost the screen. Raise the phone again.")
+            return false
+        }
         val receiver = discovery.receivers.value.firstOrNull { it.id == target.id } ?: run {
+            Log.i(TAG, "swipe up: ${target.name} is no longer discovered")
             conn.close()
             return false
         }
+        Log.i(TAG, "swipe up: handing off to ${target.name}")
         val sent = coordinator.sendTo(
             Target(receiver.id, receiver.name, receiver.webSocketUrl, receiver.host),
             sharedMedia(picked),
@@ -296,8 +302,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     _aimDebug.value = AimDebug(orientation.sensorName, sample.elevationDeg, detector.phase)
                 }
                 when (detector.onSample(sample)) {
-                    AimPhase.AIMING -> if (_video.value != null) aim.onAimStart()
-                    AimPhase.IDLE -> aim.onAimEnd()
+                    AimPhase.AIMING -> {
+                        Log.i(TAG, "raise detected at %.1f°".format(sample.elevationDeg))
+                        if (_video.value != null) aim.onAimStart()
+                    }
+                    AimPhase.IDLE -> {
+                        Log.i(TAG, "lowered at %.1f°".format(sample.elevationDeg))
+                        aim.onAimEnd()
+                    }
                     null -> Unit
                 }
             }

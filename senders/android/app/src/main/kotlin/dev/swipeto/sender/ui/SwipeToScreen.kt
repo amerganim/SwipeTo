@@ -86,6 +86,9 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.ui.platform.LocalDensity
 
 @Composable
 fun SwipeToScreen(viewModel: MainViewModel) {
@@ -153,7 +156,8 @@ fun SwipeToScreen(viewModel: MainViewModel) {
     }
 
     pairing?.let { PairDialog(it, onSubmit = viewModel::submitCode, onCancel = viewModel::cancelPairing) }
-    if (showSettings) SettingsSheet(viewModel.settings) { showSettings = false }
+    val navBar = with(LocalDensity.current) { WindowInsets.navigationBars.getBottom(this).toDp() }
+    if (showSettings) SettingsSheet(viewModel.settings, bottomInset = navBar) { showSettings = false }
 }
 
 @Composable

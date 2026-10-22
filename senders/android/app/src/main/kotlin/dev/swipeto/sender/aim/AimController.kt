@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -77,7 +78,24 @@ class AimController(
             _state.value = targeted
             log("target ${target.name} by ${resolved.by}, verified=$verified")
             onLocked(targeted)
+            keepGlowing()
         }
+    }
+
+    /**
+     * A screen stops glowing 10 s after the last `aim_start` (docs/protocol.md, section 5.3), so
+     * repeat it while the phone stays aimed.
+     */
+    private suspend fun keepGlowing() {
+        while (true) {
+            delay(HEARTBEAT_MS)
+            if (_state.value !is AimState.Targeted) return
+            aimed.values.forEach { runCatching { it.aimStart() } }
+        }
+    }
+
+    private companion object {
+        const val HEARTBEAT_MS = 4_000L
     }
 
     /** Lowered without a swipe: every screen stops glowing. */

@@ -1,6 +1,7 @@
 package dev.swipeto.sender.ui
 
 import android.os.Build
+import android.util.Log
 import android.view.HapticFeedbackConstants
 import android.view.View
 import androidx.compose.animation.AnimatedVisibility
@@ -14,6 +15,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -27,6 +30,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -43,6 +47,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.swipeto.sender.AimDebug
@@ -72,12 +77,12 @@ fun Modifier.verticalSwipes(classifier: SwipeClassifier, onSwipe: (Swipe) -> Uni
             if (!change.pressed) break
         }
         val velocity = tracker.calculateVelocity()
-        classifier.classify(
-            dxDp = (last.position.x - down.position.x) / density,
-            dyDp = (last.position.y - down.position.y) / density,
-            durationMs = last.uptimeMillis - down.uptimeMillis,
-            velocityYDpPerSec = velocity.y / density,
-        )?.let(onSwipe)
+        val dx = (last.position.x - down.position.x) / density
+        val dy = (last.position.y - down.position.y) / density
+        val duration = last.uptimeMillis - down.uptimeMillis
+        val swipe = classifier.classify(dx, dy, duration, velocity.y / density)
+        Log.d("SwipeTo", "drag dx=%.0fdp dy=%.0fdp %dms vy=%.0fdp/s -> %s".format(dx, dy, duration, velocity.y / density, swipe))
+        swipe?.let(onSwipe)
     }
 }
 
@@ -107,13 +112,19 @@ fun AimBanner(state: AimState, modifier: Modifier = Modifier) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsSheet(settings: AppSettings, onDismiss: () -> Unit) {
+fun SettingsSheet(settings: AppSettings, bottomInset: Dp, onDismiss: () -> Unit) {
     val sensitivity by settings.sensitivity.collectAsStateWithLifecycle()
     val raise by settings.raiseToAim.collectAsStateWithLifecycle()
     val camera by settings.cameraTargeting.collectAsStateWithLifecycle()
     val debug by settings.debugOverlay.collectAsStateWithLifecycle()
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    // Fully expanded: a half-open sheet would clip the last settings behind the navigation bar.
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        // The app draws edge to edge and the sheet reports no insets of its own, so the caller passes the
+        // navigation bar height measured on the main screen; otherwise the last switch sits under it.
+        Column(
+            Modifier.verticalScroll(rememberScrollState()).padding(start = 24.dp, end = 24.dp, top = 8.dp, bottom = bottomInset + 8.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
             Text("Settings", style = MaterialTheme.typography.titleLarge)
             SettingSwitch("Raise to aim", "Lift the phone toward a screen, then swipe up to send.", raise, settings::setRaiseToAim)
             Column {

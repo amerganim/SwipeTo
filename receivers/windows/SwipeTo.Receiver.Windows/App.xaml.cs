@@ -64,7 +64,7 @@ public partial class App : Application
     private async Task StartHostAsync()
     {
         var playback = new WinUiPlayback(_ui, _dataDir, _logs.CreateLogger<WinUiPlayback>());
-        var ui = new WinUiReceiverUi(_ui, () => _settings.Name, _logs.CreateLogger<WinUiReceiverUi>());
+        var ui = new WinUiReceiverUi(_ui, () => _settings.Name, _logs.CreateLogger<WinUiReceiverUi>(), _options.MarkerLeft);
         playback.WarmUp();
         ui.WarmUp();
         var host = new ReceiverHost(

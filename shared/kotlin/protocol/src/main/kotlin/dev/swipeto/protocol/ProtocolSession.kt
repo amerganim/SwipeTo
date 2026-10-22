@@ -59,8 +59,8 @@ class ProtocolSession(val localRole: Role) {
                 Role.RECEIVER -> when (state) {
                     SessionState.CONNECTED, SessionState.PAIRED -> message is HelloAck
                     SessionState.PAIRING -> message is PairResult
-                    SessionState.SESSION -> message is HandoffAck || message is PlaybackState
-                    SessionState.HANDOFF_ACTIVE -> message is HandoffAck || message is PlaybackState || message is Pullback
+                    SessionState.SESSION -> message is AimAck || message is HandoffAck || message is PlaybackState
+                    SessionState.HANDOFF_ACTIVE -> message is AimAck || message is HandoffAck || message is PlaybackState || message is Pullback
                 }
             }
         }

@@ -20,6 +20,9 @@ public sealed record LaunchOptions
     /// <summary>Started by the "Start with Windows" entry: stay quiet, no first-run window.</summary>
     public bool Background { get; init; }
 
+    /// <summary>Put the QR marker card in the bottom-left corner instead of bottom-right (two receivers on one display).</summary>
+    public bool MarkerLeft { get; init; }
+
     public string InstanceKey => DataDir is null ? "default" : Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(DataDir)))[..16];
 
     public static LaunchOptions Parse(string[] args)
@@ -35,6 +38,7 @@ public sealed record LaunchOptions
                 "--name" => options with { Name = Next() },
                 "--pair-code" => options with { PairingCode = Next() },
                 "--background" => options with { Background = true },
+                "--marker-corner" => options with { MarkerLeft = Next() == "left" },
                 _ => options,
             };
         }

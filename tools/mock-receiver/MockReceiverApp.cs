@@ -13,6 +13,7 @@ public sealed record MockReceiverOptions
     public string? TrustFile { get; init; }
     public bool Advertise { get; init; } = true;
     public LogLevel LogLevel { get; init; } = LogLevel.Information;
+    public TimeSpan MarkerRotation { get; init; } = TimeSpan.FromSeconds(2);
 }
 
 /// <summary>A console "screen": shows the pairing code and aim marker as text, simulates playback.</summary>
@@ -35,6 +36,7 @@ public sealed class MockReceiverApp : IAsyncDisposable, IReceiverUi
                 Port = options.Port,
                 Advertise = options.Advertise,
                 FixedPairingCode = options.PairingCode,
+                MarkerRotation = options.MarkerRotation,
             },
             Playback,
             this,
@@ -47,6 +49,8 @@ public sealed class MockReceiverApp : IAsyncDisposable, IReceiverUi
 
     /// <summary>Last marker shown, or null while hidden.</summary>
     public string? AimMarker { get; private set; }
+
+    public bool AimLocked { get; private set; }
 
     public static async Task<MockReceiverApp> StartAsync(MockReceiverOptions options, CancellationToken ct = default)
     {
@@ -67,16 +71,19 @@ public sealed class MockReceiverApp : IAsyncDisposable, IReceiverUi
 
     public void HidePairingCode() => Console.WriteLine("[screen] pairing code hidden");
 
-    public void ShowAim(string markerPayload)
+    public void ShowAim(string markerPayload, bool locked)
     {
+        var first = AimMarker is null || locked != AimLocked;
         AimMarker = markerPayload;
-        Console.WriteLine($"[screen] ▓▓ edge glow ON ▓▓  marker: {markerPayload}");
+        AimLocked = locked;
+        if (first) Console.WriteLine($"[screen] ▓▓ edge glow ON{(locked ? " (LOCKED)" : "")} ▓▓  marker: {markerPayload}");
     }
 
     public void HideAim()
     {
         if (AimMarker is null) return;
         AimMarker = null;
+        AimLocked = false;
         Console.WriteLine("[screen] edge glow off");
     }
 

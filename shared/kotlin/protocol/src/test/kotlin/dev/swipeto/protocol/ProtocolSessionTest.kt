@@ -112,6 +112,18 @@ class ProtocolSessionTest {
     }
 
     @Test
+    fun `aim_ack answers a lock only once in a session`() {
+        assertFailsWith<ProtocolException> { phone.incoming(AimAck(true)) }
+
+        phone.outgoing(Hello(senderId, "Pixel", token, 1))
+        phone.incoming(HelloAck(receiverId, true))
+        phone.outgoing(AimStart("Qm9vVGhlU2NyZWVu"))
+        phone.incoming(AimAck(true))
+
+        assertEquals(SessionState.SESSION, phone.state)
+    }
+
+    @Test
     fun `version check`() {
         assertTrue(ProtocolVersion.isSupported(1))
         assertFalse(ProtocolVersion.isSupported(2))

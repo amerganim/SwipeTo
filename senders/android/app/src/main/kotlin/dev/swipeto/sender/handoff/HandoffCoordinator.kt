@@ -377,7 +377,9 @@ class HandoffCoordinator(
         lastStateAt = clock()
         if (state.ended) {
             // Closed on the screen (or finished): the media is back here, paused where it stopped.
-            _notices.tryEmit("${remote.receiverName} stopped playing.")
+            _notices.tryEmit(
+                if (handedOff?.service == "web") "Opened in ${remote.receiverName}'s browser." else "${remote.receiverName} stopped playing.",
+            )
             finishRemote(state.positionMs, play = false)
         } else {
             _state.value = remote.copy(positionMs = state.positionMs, playing = state.playing)

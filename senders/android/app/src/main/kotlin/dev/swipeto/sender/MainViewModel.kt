@@ -27,6 +27,7 @@ import dev.swipeto.sender.apps.ForegroundApp
 import dev.swipeto.sender.apps.RecentMedia
 import dev.swipeto.sender.apps.LocalMediaResolver
 import dev.swipeto.sender.apps.SessionSnapshot
+import dev.swipeto.sender.apps.SharedLink
 import dev.swipeto.protocol.Transition
 import dev.swipeto.sender.aim.AimConfig
 import dev.swipeto.sender.aim.AimController
@@ -88,12 +89,37 @@ data class PickedItem(val uri: Uri, val title: String, val mime: String, val siz
 /** Apps whose content a screen opens with that service's own player (docs/protocol.md, 5.4). */
 private val SERVICES = mapOf("com.google.android.youtube" to "youtube")
 
-/** What [session] plays, as app content for a screen to open itself; null if it is not such an app or says nothing usable. */
-fun appContent(session: SessionSnapshot): PickedItem? {
-    val service = SERVICES[session.packageName] ?: return null
-    val title = session.title?.takeIf { it.isNotBlank() } ?: return null
-    val media = MediaInfo.app(service, title.take(200), session.subtitle?.take(200), durationMs = session.durationMs)
+/** A link shared to SwipeTo while [packageName] played [title] (null: nothing was playing). */
+data class Shared(val link: SharedLink, val packageName: String?, val title: String?, val subject: String?)
+
+/**
+ * What [session] plays, as app content for a screen to open itself; null if it is not such an app or
+ * says nothing usable. A link shared while this same thing played names it exactly (YouTube by id, or
+ * a page for the screen's browser); without one, YouTube is found by title and channel.
+ */
+fun appContent(session: SessionSnapshot, shared: Shared? = null): PickedItem? {
+    val title = session.title?.takeIf { it.isNotBlank() }
+    val bound = shared?.takeIf { it.packageName == session.packageName && (it.title == null || it.title == title) }
+    val media = when {
+        bound != null -> MediaInfo.app(
+            bound.link.service,
+            (title ?: bound.subject ?: bound.link.url).take(200),
+            session.subtitle?.take(200),
+            contentId = bound.link.contentId,
+            contentUrl = bound.link.url,
+            durationMs = session.durationMs,
+        )
+        title != null && SERVICES[session.packageName] != null ->
+            MediaInfo.app(SERVICES.getValue(session.packageName), title.take(200), session.subtitle?.take(200), durationMs = session.durationMs)
+        else -> return null
+    }
     return PickedItem(Uri.EMPTY, media.title, "", 0, session.durationMs, MediaKind.APP, media)
+}
+
+/** A shared link with nothing playing: the screen opens it from the start. */
+fun sharedOnly(shared: Shared): PickedItem {
+    val media = MediaInfo.app(shared.link.service, (shared.subject ?: shared.link.url).take(200), contentId = shared.link.contentId, contentUrl = shared.link.url)
+    return PickedItem(Uri.EMPTY, media.title, "", 0, null, MediaKind.APP, media)
 }
 
 /** What was picked: one item, or several to page through with left/right swipes. */
@@ -209,6 +235,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _receivers = MutableStateFlow<List<ReceiverItem>>(emptyList())
     val receivers: StateFlow<List<ReceiverItem>> = _receivers.asStateFlow()
+
+    /** Nothing playing on the phone (a link shared from a page that isn't playing). */
+    private object NoPlayback : LocalPlayback {
+        override val positionMs = 0L
+        override val isPlaying = false
+        override fun pause() = Unit
+        override fun resumeAt(positionMs: Long, play: Boolean) = Unit
+    }
 
     /** SwipeTo's own player. */
     private val inAppPlayback = object : LocalPlayback {
@@ -340,26 +374,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch {
             // Another app plays: find the file, so a swipe can send it (and SwipeTo can pause that app).
-            mediaWatcher.playing.collect { session ->
-                val resolved = session?.let { s ->
-                    (appContent(s) ?: withContext(Dispatchers.IO) { mediaResolver.resolve(s) })?.let { Source(it, ExternalPlayback(mediaWatcher, s.packageName), s.packageName) }
-                }
-                if (resolved?.item != _external.value?.item || resolved?.app != _external.value?.app) {
-                    EventLog.i(
-                        when {
-                            session == null -> "no other app playing"
-                            resolved != null -> "${session.appLabel} plays ${resolved.item.title}: ${resolved.item.app?.let { "${it.service} by title, channel ${it.channel}" } ?: resolved.item.uri}"
-                            else -> "${session.appLabel} plays something SwipeTo can't identify (title=${session.title})"
-                        },
-                    )
-                }
-                watchHandedFromApp()
-                _external.value = resolved
-                _unresolved.value = session?.takeIf { resolved == null }
-                warmLinks()
-                updateAiming()
-                updatePreparing()
-            }
+            mediaWatcher.playing.collect { session -> updateExternal(session) }
         }
         viewModelScope.launch {
             combine(settings.sensitivity, settings.cameraTargeting) { sensitivity, camera -> sensitivity to camera }.collect { (sensitivity, camera) ->
@@ -382,6 +397,54 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** The last link shared to SwipeTo, and what was playing then. */
+    @Volatile private var shared: Shared? = null
+
+    /** Another app plays [session] (or nothing): find what it is, so a swipe can send it. */
+    private suspend fun updateExternal(session: SessionSnapshot?) {
+        val resolved = session?.let { s ->
+            (appContent(s, shared) ?: withContext(Dispatchers.IO) { mediaResolver.resolve(s) })?.let { Source(it, ExternalPlayback(mediaWatcher, s.packageName), s.packageName) }
+        }
+        if (resolved?.item != _external.value?.item || resolved?.app != _external.value?.app) {
+            EventLog.i(
+                when {
+                    session == null -> "no other app playing"
+                    resolved != null -> "${session.appLabel} plays ${resolved.item.title}: ${resolved.item.app?.let { "${it.service} ${it.contentId?.let { id -> "id $id" } ?: it.url.ifEmpty { "by title, channel ${it.channel}" }}" } ?: resolved.item.uri}"
+                    else -> "${session.appLabel} plays something SwipeTo can't identify (title=${session.title})"
+                },
+            )
+        }
+        watchHandedFromApp()
+        _external.value = resolved
+        _unresolved.value = session?.takeIf { resolved == null }
+        warmLinks()
+        updateAiming()
+        updatePreparing()
+    }
+
+    /**
+     * Share → SwipeTo: remembers [link] for what is playing now and sends it to the screen used last
+     * (at the app's position). With no screen around it waits for the next lift and swipe. Returns
+     * what to tell the user.
+     */
+    suspend fun onLinkShared(sharedLink: SharedLink, subject: String?): String {
+        val playing = mediaWatcher.playing.value
+        shared = Shared(sharedLink, playing?.packageName, playing?.title, subject)
+        EventLog.i("shared ${sharedLink.service} link ${sharedLink.url} while ${playing?.appLabel ?: "nothing"} played")
+        updateExternal(playing)
+        if (link.value !is LinkState.Idle) return "SwipeTo: a screen is already playing. Bring it back first."
+        val target = screenToPrepare() ?: return "SwipeTo: got it. Lift the phone toward a screen and swipe up to send."
+        val receiver = discovery.receivers.value.firstOrNull { it.id == target.id } ?: return "SwipeTo: ${target.name} is not reachable."
+        val source = _external.value ?: Source(sharedOnly(shared!!), NoPlayback)
+        handedFrom = source.playback
+        handedFromAppPaused = false
+        sentFromGallery = false
+        val sent = coordinator.sendTo(Target(receiver.id, receiver.name, receiver.webSocketUrl, receiver.host), sharedMedia(source.item), links.take(receiver.id))
+        if (!sent) return "SwipeTo: ${receiver.name} didn't take it."
+        trust.markUsed(receiver.id)
+        _haptics.tryEmit(Haptic.SENT)
+        return "Sent to ${receiver.name}"
+    }
     /**
      * What a swipe sends: SwipeTo's own media while it is in front, else what another app plays
      * (when it could be identified).

@@ -43,6 +43,21 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Share → SwipeTo from YouTube, a browser or any app with a link. -->
+        <activity
+            android:name=".ShareActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:label="Send to screen"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
         <service
             android:name=".SwipeToService"
             android:exported="false"

@@ -2,7 +2,8 @@ using SwipeTo.Protocol;
 
 namespace SwipeTo.Net.Receiver;
 
-public readonly record struct PlaybackSnapshot(long PositionMs, bool Playing, bool Ended);
+/// <summary><see cref="Playing"/> is the intent; <see cref="Buffering"/>: no frames showing yet (opening, or waiting for data).</summary>
+public readonly record struct PlaybackSnapshot(long PositionMs, bool Playing, bool Ended, bool Buffering = false);
 
 /// <summary>
 /// The thing that actually plays media on a receiver: a simulated clock in the mock receiver, a
@@ -78,6 +79,9 @@ public sealed class ReceiverOptions
     public int PairingAttempts { get; init; } = 3;
     public TimeSpan PairRequestInterval { get; init; } = TimeSpan.FromSeconds(5);
     public TimeSpan AimTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>Prepared media is dropped this long after the last <c>prepare</c> (docs/protocol.md, 5.3).</summary>
+    public TimeSpan PrepareTimeout { get; init; } = TimeSpan.FromSeconds(10);
     public TimeSpan MarkerRotation { get; init; } = TimeSpan.FromSeconds(2);
     public TimeSpan StateInterval { get; init; } = TimeSpan.FromSeconds(1);
 

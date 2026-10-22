@@ -1,7 +1,10 @@
 package dev.swipeto.sender.aim
 
-/** One orientation reading: camera elevation in degrees above the horizon (see [AimConfig]). */
-data class OrientationSample(val timeMs: Long, val elevationDeg: Float)
+/**
+ * One orientation reading: camera elevation in degrees above the horizon (see [AimConfig]) and, when
+ * the phone has a compass, the heading the back camera faces (0 = magnetic north, clockwise).
+ */
+data class OrientationSample(val timeMs: Long, val elevationDeg: Float, val headingDeg: Float? = null)
 
 enum class AimPhase { IDLE, AIMING }
 

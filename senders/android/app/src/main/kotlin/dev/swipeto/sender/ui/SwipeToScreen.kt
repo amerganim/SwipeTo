@@ -137,7 +137,7 @@ fun SwipeToScreen(viewModel: MainViewModel) {
                 )
                 else -> {
                     VideoArea(viewModel, hasVideo = video != null, aim = aim, onPick = pickVideo)
-                    if (debugOn) DebugPanel(aimDebug, aim, viewModel::simulateAim)
+                    if (debugOn) DebugPanel(aimDebug, aim, viewModel::simulateAim, viewModel::forgetDirections)
                     video?.let {
                         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(it.title, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)

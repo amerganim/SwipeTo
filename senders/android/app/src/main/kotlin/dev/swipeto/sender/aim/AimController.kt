@@ -11,6 +11,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+/** A paired screen a raise could be aimed at: when it was last used and how the phone faces it. */
+data class AimOption(val target: LinkTarget, val lastUsedAt: Long?, val facing: Facing)
+
 /** What aiming looks like right now, for the UI and for swipe-up. */
 sealed interface AimState {
     data object Idle : AimState
@@ -30,17 +33,22 @@ sealed interface AimState {
  * the one in front → confirm its marker nonce (`aim_start {nonce}` → `aim_ack`) → `aim_end` to the
  * others. Swipe-up then takes the target's open connection for the handoff ([takeTarget]).
  *
- * Tuned on a Galaxy A15, where people swipe the moment the screen glows:
- * - With a single paired screen it is the target **at once**; the camera ([preferred]) keeps
- *   looking and upgrades the lock to verified if it reads the marker.
- * - A swipe while still searching among several screens takes the [fallback]'s best guess.
- * - The swipe itself tips the phone down, so lowering keeps the target for [graceMs] before the
- *   aim really ends.
+ * Pointing (compass + camera, see [PointingFilter]):
+ * - Screens the phone faces **away** from (learned bearing, other direction) are left alone.
+ * - A screen it faces (**toward**) can be the target at once; with several, the camera
+ *   ([preferred]) decides, else the [fallback]'s most recently used.
+ * - A screen whose direction is **unknown** (never locked yet) glows and shows its marker, but only
+ *   the camera can make it the target; that lock teaches its direction.
+ *
+ * Tuned on a Galaxy A15, where people swipe the moment the screen glows: a single faced screen is
+ * targeted immediately (the camera may still upgrade it to verified), a swipe while still choosing
+ * takes the best guess, and lowering keeps the target for [graceMs] because the swipe itself tips
+ * the phone down.
  */
 class AimController(
     private val scope: CoroutineScope,
     private val links: StandbyLinks,
-    private val candidates: () -> List<Pair<LinkTarget, Long?>>,
+    private val candidates: () -> List<AimOption>,
     private val preferred: TargetResolver,
     private val fallback: TargetResolver = FallbackResolver,
     private val graceMs: Long = 1_200,
@@ -54,7 +62,7 @@ class AimController(
     private var glow: Job? = null
     private var ending: Job? = null
     private var aimed: Map<String, SenderConnection> = emptyMap()
-    private var aimedCandidates: List<Pair<LinkTarget, Long?>> = emptyList()
+    private var aimedOptions: List<AimOption> = emptyList()
 
     fun onAimStart() {
         if (ending?.isActive == true) {
@@ -65,31 +73,39 @@ class AimController(
         if (_state.value !is AimState.Idle && _state.value !is AimState.NoScreens) return
         job?.cancel()
         job = scope.launch {
-            val screens = candidates()
-            val opened = screens.map { (target, _) -> async { target to links.get(target) } }.awaitAll()
-                .mapNotNull { (target, conn) -> conn?.let { target to it } }
+            val all = candidates()
+            val screens = all.filter { it.facing != Facing.AWAY }
+            if (screens.isEmpty()) {
+                // Raised, but toward no paired screen: nothing should glow.
+                log(if (all.isEmpty()) "no paired screen" else "facing away from every paired screen")
+                _state.value = if (all.isEmpty()) AimState.NoScreens else AimState.Idle
+                return@launch
+            }
+            val opened = screens.map { option -> async { option to links.get(option.target) } }.awaitAll()
+                .mapNotNull { (option, conn) -> conn?.let { option to it } }
             if (opened.isEmpty()) {
                 _state.value = AimState.NoScreens
                 return@launch
             }
-            aimed = opened.associate { (target, conn) -> target.id to conn }
-            aimedCandidates = screens.filter { it.first.id in aimed }
+            aimed = opened.associate { (option, conn) -> option.target.id to conn }
+            aimedOptions = opened.map { it.first }
             opened.forEach { (_, conn) -> runCatching { conn.aimStart() } }
-            log("aiming at ${opened.size} screen(s)")
+            log("aiming at ${opened.size} screen(s): ${aimedOptions.joinToString { "${it.target.name} ${it.facing}" }}")
             startGlowHeartbeat()
 
-            if (opened.size == 1) {
-                target(opened[0].first, ResolvedBy.ONLY_SCREEN, verified = false)
+            val toward = aimedOptions.filter { it.facing == Facing.TOWARD }
+            if (toward.size == 1) {
+                target(toward[0].target, ResolvedBy.COMPASS, verified = false)
             } else {
-                _state.value = AimState.Searching(opened.map { it.first.name })
+                _state.value = AimState.Searching(opened.map { it.first.target.name })
             }
 
-            // Look for a marker; with several screens fall back if none is seen.
-            val read = preferred.resolve(aimedCandidates.toAimCandidates())
-            val chosen = read ?: if (opened.size > 1) fallback.resolve(aimedCandidates.toAimCandidates()) else null
-            val target = chosen?.let { c -> opened.firstOrNull { it.first.id == c.id }?.first }
+            // Look for a marker among everything that glows; fall back only among screens faced.
+            val read = preferred.resolve(aimedOptions.toAimCandidates())
+            val chosen = read ?: if (toward.size > 1) fallback.resolve(toward.toAimCandidates()) else null
+            val target = chosen?.let { c -> aimedOptions.firstOrNull { it.target.id == c.id }?.target }
             if (chosen == null || target == null) {
-                if (opened.size > 1) log("no target resolved")
+                if (toward.size != 1) log("no target resolved")
                 return@launch
             }
             val verified = chosen.nonce?.let { nonce ->
@@ -130,8 +146,10 @@ class AimController(
         val target = when (val state = _state.value) {
             is AimState.Targeted -> state.target
             is AimState.Searching -> {
-                val guess = fallback.resolve(aimedCandidates.toAimCandidates()) ?: return null
-                aimedCandidates.firstOrNull { it.first.id == guess.id }?.first ?: return null
+                // Only a screen the phone faces may be guessed; an unknown one needs the camera.
+                val toward = aimedOptions.filter { it.facing == Facing.TOWARD }
+                val guess = fallback.resolve(toward.toAimCandidates()) ?: return null
+                toward.firstOrNull { it.target.id == guess.id }?.target ?: return null
             }
             else -> return null
         }
@@ -170,7 +188,7 @@ class AimController(
         }
     }
 
-    private fun List<Pair<LinkTarget, Long?>>.toAimCandidates() = map { (t, used) -> AimCandidate(t.id, t.name, used) }
+    private fun List<AimOption>.toAimCandidates() = map { AimCandidate(it.target.id, it.target.name, it.lastUsedAt) }
 
     private companion object {
         const val HEARTBEAT_MS = 4_000L

@@ -60,8 +60,11 @@ class AimControllerTest {
         tv.close()
     }
 
-    private fun controller(screens: List<Pair<LinkTarget, Long?>>) =
-        AimController(scope, links, { screens }, preferred = camera, fallback = FallbackResolver, graceMs = 300)
+    private fun controller(screens: List<Pair<LinkTarget, Long?>>, facing: Facing = Facing.TOWARD) =
+        options(screens.map { (t, used) -> AimOption(t, used, facing) })
+
+    private fun options(options: List<AimOption>) =
+        AimController(scope, links, { options }, preferred = camera, fallback = FallbackResolver, graceMs = 300)
 
     private suspend fun AimController.settled(): AimState = withTimeout(5_000) {
         state.first { it is AimState.Targeted || it is AimState.NoScreens }
@@ -70,7 +73,7 @@ class AimControllerTest {
     @Test
     fun `camera marker picks the screen in front, it locks, the other stops glowing`() = runBlocking<Unit> {
         seen = MarkerPayload(tvTarget.id, "TvMarkerNonce000001")
-        val aim = controller(listOf(deskTarget to null, tvTarget to null))
+        val aim = controller(listOf(deskTarget to null, tvTarget to null), Facing.UNKNOWN)
 
         aim.onAimStart()
         val targeted = aim.settled() as AimState.Targeted
@@ -86,7 +89,7 @@ class AimControllerTest {
     @Test
     fun `stale marker still targets but is not verified`() = runBlocking<Unit> {
         seen = MarkerPayload(deskTarget.id, "PhotoOfAnOldMarker01")
-        val aim = controller(listOf(deskTarget to null, tvTarget to null))
+        val aim = controller(listOf(deskTarget to null, tvTarget to null), Facing.UNKNOWN)
 
         aim.onAimStart()
         val targeted = aim.settled() as AimState.Targeted
@@ -97,14 +100,14 @@ class AimControllerTest {
     }
 
     @Test
-    fun `without a marker, the only screen is the target`() = runBlocking<Unit> {
+    fun `without a marker, the one screen the phone faces is the target`() = runBlocking<Unit> {
         val aim = controller(listOf(deskTarget to null))
 
         aim.onAimStart()
         val targeted = aim.settled() as AimState.Targeted
 
-        assertEquals(ResolvedBy.ONLY_SCREEN, targeted.by)
-        assertTrue(desk.glowing)
+        assertEquals(ResolvedBy.COMPASS, targeted.by)
+        withTimeout(2_000) { while (!desk.glowing) delay(20) }
     }
 
     @Test
@@ -136,7 +139,7 @@ class AimControllerTest {
 
         aim.onAimStart()
         val first = withTimeout(500) { aim.state.first { it is AimState.Targeted } } as AimState.Targeted
-        assertEquals(ResolvedBy.ONLY_SCREEN, first.by)
+        assertEquals(ResolvedBy.COMPASS, first.by)
         assertFalse(first.verified)
 
         val upgraded = withTimeout(3_000) { aim.state.first { it is AimState.Targeted && it.verified } } as AimState.Targeted
@@ -185,6 +188,43 @@ class AimControllerTest {
 
         assertTrue(aim.state.value is AimState.Targeted)
         assertTrue(desk.glowing)
+    }
+
+    @Test
+    fun `facing away from every learned screen, nothing glows`() = runBlocking<Unit> {
+        val aim = controller(listOf(deskTarget to null, tvTarget to null), Facing.AWAY)
+
+        aim.onAimStart()
+        delay(600)
+
+        assertEquals(AimState.Idle, aim.state.value)
+        assertFalse(desk.glowing || tv.glowing)
+        assertTrue(desk.received.none { it is dev.swipeto.protocol.AimStart })
+    }
+
+    @Test
+    fun `a screen with no learned direction needs the camera`() = runBlocking<Unit> {
+        // Nothing read by the camera: it glows (so its marker can be read) but is never the target.
+        val aim = controller(listOf(deskTarget to null), Facing.UNKNOWN)
+
+        aim.onAimStart()
+        withTimeout(2_000) { aim.state.first { it is AimState.Searching } }
+        delay(2_800) // the camera search times out
+
+        assertTrue(aim.state.value is AimState.Searching)
+        assertEquals(null, aim.takeTarget())
+        withTimeout(2_000) { while (!desk.glowing) delay(20) }
+    }
+
+    @Test
+    fun `facing one screen while another is unknown, the faced one is the target`() = runBlocking<Unit> {
+        val aim = options(listOf(AimOption(deskTarget, null, Facing.TOWARD), AimOption(tvTarget, null, Facing.UNKNOWN)))
+
+        aim.onAimStart()
+        val targeted = aim.settled() as AimState.Targeted
+
+        assertEquals("Desk", targeted.target.name)
+        assertEquals(ResolvedBy.COMPASS, targeted.by)
     }
 
     @Test

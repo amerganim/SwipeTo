@@ -16,6 +16,9 @@ import androidx.media3.exoplayer.ExoPlayer
 import dev.swipeto.protocol.MediaKind
 import dev.swipeto.sender.aim.AimConfig
 import dev.swipeto.sender.aim.AimController
+import dev.swipeto.sender.aim.AimOption
+import dev.swipeto.sender.aim.PointingFilter
+import dev.swipeto.sender.aim.ResolvedBy
 import dev.swipeto.sender.aim.AimPhase
 import dev.swipeto.sender.aim.AimState
 import dev.swipeto.sender.aim.CameraMarkerResolver
@@ -29,6 +32,7 @@ import dev.swipeto.sender.aim.Swipe
 import dev.swipeto.sender.aim.SwipeClassifier
 import dev.swipeto.sender.aim.SwipeConfig
 import dev.swipeto.sender.data.AppSettings
+import dev.swipeto.sender.data.BearingStore
 import dev.swipeto.sender.data.TrustStore
 import dev.swipeto.sender.discovery.DiscoveredReceiver
 import dev.swipeto.sender.discovery.ReceiverDiscovery
@@ -65,7 +69,14 @@ data class ReceiverItem(val receiver: DiscoveredReceiver, val paired: Boolean)
 data class PairingRequest(val receiverName: String, val attempt: Int, val reply: CompletableDeferred<String?>)
 
 /** Live values for the sensor debug panel. */
-data class AimDebug(val sensor: String, val elevationDeg: Float?, val phase: AimPhase)
+data class AimDebug(
+    val sensor: String,
+    val elevationDeg: Float?,
+    val phase: AimPhase,
+    val headingDeg: Float? = null,
+    /** "Laptop 121° (4)" for each paired screen with a learned direction. */
+    val bearings: String = "",
+)
 
 enum class Haptic { TARGET_LOCKED, SENT, BROUGHT_BACK }
 
@@ -82,6 +93,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val detector = RaiseToAimDetector()
     val swipes = SwipeClassifier()
     private val scanner = CameraMarkerScanner(app)
+    private val bearings = BearingStore(app)
+    private val pointing = PointingFilter()
+    @Volatile private var heading: Float? = null
+    private var headingAtRaise: Float? = null
     private var aimJob: Job? = null
     private var foreground = false
 
@@ -145,14 +160,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val aim = AimController(
         scope = viewModelScope,
         links = links,
-        candidates = { pairedTargets().map { it to trust.lastUsed(it.id) } },
+        candidates = {
+            val facingNow = headingAtRaise ?: heading
+            pairedTargets().map { AimOption(it, trust.lastUsed(it.id), pointing.facing(facingNow, bearings.get(it.id))) }
+        },
         preferred = CameraMarkerResolver(
             scanner,
             timeoutMs = { AimConfig.forSensitivity(settings.sensitivity.value).markerSearchMs },
             enabled = { settings.cameraTargeting.value },
         ),
         fallback = FallbackResolver,
-        onLocked = { _haptics.tryEmit(Haptic.TARGET_LOCKED) },
+        onLocked = { targeted ->
+            _haptics.tryEmit(Haptic.TARGET_LOCKED)
+            // The camera proved which screen is in front: remember which way that is.
+            if (targeted.verified) learnBearing(targeted.target.id, fromCamera = true)
+        },
         log = { Log.i(TAG, it) },
     )
 
@@ -239,7 +261,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Debug overlay: behave as if the phone had just been raised (or lowered). */
-    fun simulateAim(start: Boolean) = if (start) aim.onAimStart() else aim.endNow()
+    fun simulateAim(start: Boolean) {
+        headingAtRaise = heading
+        if (start) aim.onAimStart() else aim.endNow()
+    }
 
     private suspend fun swipeUp(): Boolean {
         val picked = _video.value ?: return false
@@ -259,6 +284,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 return false
             }
         }
+        val chosenBy = (aimState.value as? AimState.Targeted)?.by
         val (target, conn) = aim.takeTarget() ?: run {
             Log.i(TAG, "swipe up: the aimed connection is gone")
             _hints.tryEmit("Lost the screen. Raise the phone again.")
@@ -278,6 +304,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (sent) {
             trust.markUsed(receiver.id)
             _haptics.tryEmit(Haptic.SENT)
+            // A deliberate send toward a known screen refines its direction (never from a guess).
+            if (chosenBy == ResolvedBy.COMPASS || chosenBy == ResolvedBy.CAMERA) learnBearing(receiver.id, fromCamera = false)
         }
         detector.reset()
         return sent
@@ -293,15 +321,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         aimJob = viewModelScope.launch {
             var lastDebug = 0L
             orientation.samples().collect { sample ->
+                heading = sample.headingDeg
                 if (sample.timeMs - lastDebug >= 80) {
                     lastDebug = sample.timeMs
-                    _aimDebug.value = AimDebug(orientation.sensorName, sample.elevationDeg, detector.phase)
+                    _aimDebug.value = AimDebug(orientation.sensorName, sample.elevationDeg, detector.phase, sample.headingDeg, bearingsText())
                     // With the debug panel on, keep a trace for tuning thresholds against real motion.
                     if (settings.debugOverlay.value) Log.d("SwipeToTrace", "%d %.1f %s".format(sample.timeMs, sample.elevationDeg, detector.phase))
                 }
                 when (detector.onSample(sample)) {
                     AimPhase.AIMING -> {
-                        Log.i(TAG, "raise detected at %.1f°".format(sample.elevationDeg))
+                        headingAtRaise = sample.headingDeg
+                        Log.i(TAG, "raise detected at %.1f°, heading %s".format(sample.elevationDeg, sample.headingDeg?.let { "%.0f°".format(it) } ?: "unknown"))
                         if (_video.value != null) aim.onAimStart()
                     }
                     AimPhase.IDLE -> {
@@ -321,6 +351,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (aimState.value !is AimState.Idle) aim.endNow()
         _aimDebug.value = _aimDebug.value.copy(phase = AimPhase.IDLE)
     }
+
+    /** Debug panel: forget every learned screen direction (after moving a screen). */
+    fun forgetDirections() {
+        bearings.forgetAll()
+        _hints.tryEmit("Directions forgotten. Point the camera at each screen once to teach them again.")
+    }
+
+    private fun learnBearing(receiverId: String, fromCamera: Boolean) {
+        val now = headingAtRaise ?: heading ?: return
+        val learned = pointing.learn(bearings.get(receiverId), now, fromCamera)
+        bearings.put(receiverId, learned)
+        Log.i(TAG, "learned direction of $receiverId: %.0f° (%d samples)".format(learned.headingDeg, learned.samples))
+    }
+
+    private fun bearingsText(): String = pairedTargets().mapNotNull { t ->
+        bearings.get(t.id)?.let { "${t.name} %.0f° (%d)".format(it.headingDeg, it.samples) }
+    }.joinToString().ifEmpty { "none learned" }
 
     private fun pairedTargets(): List<LinkTarget> =
         discovery.receivers.value.filter { trust.isPaired(it.id) }.map { LinkTarget(it.id, it.name, it.webSocketUrl) }

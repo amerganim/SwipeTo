@@ -5,7 +5,19 @@ import kotlinx.coroutines.withTimeoutOrNull
 /** A paired screen that is online and could be the target. */
 data class AimCandidate(val id: String, val name: String, val lastUsedAt: Long? = null)
 
-enum class ResolvedBy { CAMERA, ONLY_SCREEN, MOST_RECENT }
+enum class ResolvedBy {
+    /** The rear camera read the screen's QR marker. */
+    CAMERA,
+
+    /** The phone faces the screen's learned compass bearing. */
+    COMPASS,
+
+    /** The only candidate. */
+    ONLY_SCREEN,
+
+    /** Several faced screens and no marker: the one used most recently. */
+    MOST_RECENT,
+}
 
 /** The chosen screen, and the marker nonce if the camera read one (to confirm with `aim_ack`). */
 data class ResolvedTarget(val id: String, val nonce: String?, val by: ResolvedBy)

@@ -177,17 +177,20 @@ private fun SettingSwitch(title: String, subtitle: String, checked: Boolean, onC
 
 /** Live sensor values and manual aim controls, for tuning thresholds on a real phone. */
 @Composable
-fun DebugPanel(debug: AimDebug, aim: AimState, onAim: (Boolean) -> Unit) {
+fun DebugPanel(debug: AimDebug, aim: AimState, onAim: (Boolean) -> Unit, onForget: () -> Unit) {
     Surface(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.padding(12.dp)) {
             val mono = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
             Text("sensor     ${debug.sensor}", style = mono)
             Text("elevation  ${debug.elevationDeg?.let { "%+6.1f°".format(it) } ?: "—"}", style = mono)
+            Text("heading    ${debug.headingDeg?.let { "%.0f°".format(it) } ?: "— (no compass)"}", style = mono)
+            Text("learned    ${debug.bearings}", style = mono)
             Text("detector   ${debug.phase}", style = mono)
             Text("aim        ${aimLabel(aim)}", style = mono)
             Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { onAim(true) }) { Text("Aim now") }
                 OutlinedButton(onClick = { onAim(false) }) { Text("End aim") }
+                OutlinedButton(onClick = onForget) { Text("Forget directions") }
             }
         }
     }

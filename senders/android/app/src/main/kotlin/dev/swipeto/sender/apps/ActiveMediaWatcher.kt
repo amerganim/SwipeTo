@@ -29,6 +29,8 @@ data class SessionSnapshot(
     val speed: Float,
     val durationMs: Long?,
     val title: String?,
+    /** Channel or artist: the description's subtitle (YouTube puts the channel there). */
+    val subtitle: String?,
     val mediaId: String?,
     /** Every metadata key with a printable value (bitmaps as their size). */
     val metadata: Map<String, String>,
@@ -167,7 +169,8 @@ class ActiveMediaWatcher(private val context: Context, private val log: (String)
             positionAtElapsedMs = playback?.lastPositionUpdateTime ?: SystemClock.elapsedRealtime(),
             speed = playback?.playbackSpeed?.takeIf { it > 0 } ?: 1f,
             durationMs = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION)?.takeIf { it > 0 },
-            title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: metadata?.description?.title?.toString(),
+            title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE)?.takeIf { it.isNotBlank() } ?: metadata?.description?.title?.toString()?.takeIf { it.isNotBlank() },
+            subtitle = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST)?.takeIf { it.isNotBlank() } ?: metadata?.description?.subtitle?.toString()?.takeIf { it.isNotBlank() },
             mediaId = metadata?.getString(MediaMetadata.METADATA_KEY_MEDIA_ID),
             metadata = fields,
             details = details,

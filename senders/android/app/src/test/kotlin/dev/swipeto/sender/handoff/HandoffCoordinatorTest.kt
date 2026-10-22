@@ -276,6 +276,22 @@ class HandoffCoordinatorTest {
     }
 
     @Test
+    fun `app content is handed off by reference, at the app's position, nothing published`() = runBlocking {
+        val youTube = SharedMedia(null, MediaKind.APP, "Big Buck Bunny", 634_000, dev.swipeto.protocol.MediaInfo.app("youtube", "Big Buck Bunny", "Blender"))
+        local.positionMs = 127_503
+
+        assertTrue(coordinator.sendTo(target, youTube))
+
+        val handoff = receiver.lastHandoff!!
+        assertEquals(MediaKind.APP, handoff.media.kind)
+        assertEquals("youtube", handoff.media.service)
+        assertEquals("Blender", handoff.media.channel)
+        assertEquals(127_503, handoff.positionMs)
+        assertTrue(handoff.playing)
+        assertEquals(0, publisher.published)
+    }
+
+    @Test
     fun `album paging needs the screen to have the media`() = runBlocking {
         assertFalse(coordinator.show(media, Transition.NEXT))
     }

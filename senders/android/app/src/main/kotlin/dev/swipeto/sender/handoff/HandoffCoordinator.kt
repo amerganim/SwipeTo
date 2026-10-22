@@ -51,7 +51,8 @@ fun interface PairingPrompt {
 
 data class Target(val id: String, val name: String, val webSocketUrl: String, val host: InetAddress)
 
-data class SharedMedia(val file: MediaFile, val kind: MediaKind, val title: String, val durationMs: Long?)
+/** A file the phone serves, or (with [app], and no file) another app's content handed off by reference. */
+data class SharedMedia(val file: MediaFile?, val kind: MediaKind, val title: String, val durationMs: Long?, val app: MediaInfo? = null)
 
 sealed interface LinkState {
     data object Idle : LinkState
@@ -141,13 +142,14 @@ class HandoffCoordinator(
 
             // A video that already finished here starts over there.
             val finished = media.durationMs?.let { local.positionMs >= it - END_SLACK_MS } ?: false
-            val playing = media.kind == MediaKind.VIDEO && (local.isPlaying || finished)
-            val position = if (media.kind == MediaKind.VIDEO && !finished) local.positionMs else 0L
-            val info = media.info(publisher.publish(media.file, target.host))
+            val timed = media.kind != MediaKind.IMAGE
+            val playing = timed && (local.isPlaying || finished)
+            val position = if (timed && !finished) local.positionMs else 0L
+            val info = media.app ?: media.info(publisher.publish(media.file!!, target.host))
             val ack = conn.handoff(info, position, playing)
             if (!ack.accepted) return fail(refusal(target.name, ack.reason), conn)
 
-            val overlap = playing && media.kind == MediaKind.VIDEO
+            val overlap = playing && media.kind != MediaKind.IMAGE
             if (!overlap) local.pause()
             lastStateAt = clock()
             log("handed off to ${target.name} at $position ms, playing=$playing")
@@ -177,8 +179,8 @@ class HandoffCoordinator(
         val conn = connection?.takeIf { !remote.reconnecting } ?: return false
         val target = target ?: return false
         return try {
-            val info = media.info(publisher.publish(media.file, target.host))
-            val playing = media.kind == MediaKind.VIDEO
+            val info = media.app ?: media.info(publisher.publish(media.file!!, target.host))
+            val playing = media.kind != MediaKind.IMAGE
             val ack = conn.handoff(info, 0, playing, transition)
             if (!ack.accepted) {
                 _notices.tryEmit(refusal(target.name, ack.reason))
@@ -440,8 +442,9 @@ class HandoffCoordinator(
         ErrorCode.UNSUPPORTED_MEDIA -> "$name can't play this file. Try another video or photo."
         ErrorCode.VERSION_MISMATCH -> "$name needs a different SwipeTo version."
         ErrorCode.NOT_PAIRED -> "$name doesn't recognise this phone. Pair again."
+        ErrorCode.SERVICE_UNAVAILABLE -> "$name couldn't find this video on YouTube. Check its YouTube API key in its Settings."
         else -> "$name said no."
     }
 
-    private fun SharedMedia.info(url: String) = MediaInfo(kind, url, file.mime, title, durationMs)
+    private fun SharedMedia.info(url: String) = MediaInfo(kind, url, file!!.mime, title, durationMs)
 }

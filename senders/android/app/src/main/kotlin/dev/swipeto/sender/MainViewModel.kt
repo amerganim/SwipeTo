@@ -82,8 +82,19 @@ private const val TAG = "SwipeTo"
 /** Photos are decoded down to about this many pixels on the long side for the phone's own screen. */
 private const val PHOTO_MAX_PX = 1600
 
-/** A picked video or photo. */
-data class PickedItem(val uri: Uri, val title: String, val mime: String, val size: Long, val durationMs: Long?, val kind: MediaKind)
+/** A picked video or photo, or ([app] set) another app's content such as a YouTube video. */
+data class PickedItem(val uri: Uri, val title: String, val mime: String, val size: Long, val durationMs: Long?, val kind: MediaKind, val app: MediaInfo? = null)
+
+/** Apps whose content a screen opens with that service's own player (docs/protocol.md, 5.4). */
+private val SERVICES = mapOf("com.google.android.youtube" to "youtube")
+
+/** What [session] plays, as app content for a screen to open itself; null if it is not such an app or says nothing usable. */
+fun appContent(session: SessionSnapshot): PickedItem? {
+    val service = SERVICES[session.packageName] ?: return null
+    val title = session.title?.takeIf { it.isNotBlank() } ?: return null
+    val media = MediaInfo.app(service, title.take(200), session.subtitle?.take(200), durationMs = session.durationMs)
+    return PickedItem(Uri.EMPTY, media.title, "", 0, session.durationMs, MediaKind.APP, media)
+}
 
 /** What was picked: one item, or several to page through with left/right swipes. */
 data class Album(val items: List<PickedItem>, val index: Int) {
@@ -330,12 +341,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             // Another app plays: find the file, so a swipe can send it (and SwipeTo can pause that app).
             mediaWatcher.playing.collect { session ->
-                val resolved = session?.let { s -> withContext(Dispatchers.IO) { mediaResolver.resolve(s) }?.let { Source(it, ExternalPlayback(mediaWatcher, s.packageName), s.packageName) } }
-                if (resolved?.item?.uri != _external.value?.item?.uri || resolved?.app != _external.value?.app) {
+                val resolved = session?.let { s ->
+                    (appContent(s) ?: withContext(Dispatchers.IO) { mediaResolver.resolve(s) })?.let { Source(it, ExternalPlayback(mediaWatcher, s.packageName), s.packageName) }
+                }
+                if (resolved?.item != _external.value?.item || resolved?.app != _external.value?.app) {
                     EventLog.i(
                         when {
                             session == null -> "no other app playing"
-                            resolved != null -> "${session.appLabel} plays ${resolved.item.title}: ${resolved.item.uri}"
+                            resolved != null -> "${session.appLabel} plays ${resolved.item.title}: ${resolved.item.app?.let { "${it.service} by title, channel ${it.channel}" } ?: resolved.item.uri}"
                             else -> "${session.appLabel} plays something SwipeTo can't identify (title=${session.title})"
                         },
                     )
@@ -633,6 +646,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The same [ContentMediaFile] per item, so the publisher hands out the same URL (prefetch, then handoff). */
     private fun sharedMedia(picked: PickedItem): SharedMedia {
+        picked.app?.let { return SharedMedia(null, MediaKind.APP, picked.title, picked.durationMs, it) }
         val file = files.getOrPut(picked.uri) { ContentMediaFile(getApplication<Application>().contentResolver, picked.uri, picked.mime, picked.size) }
         val duration = if (picked.kind == MediaKind.VIDEO) picked.durationMs ?: player.duration.takeIf { it > 0 } else null
         return SharedMedia(file, picked.kind, picked.title, duration)
@@ -644,8 +658,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val item = source.item
         val receiver = discovery.receivers.value.firstOrNull { it.id == target.id } ?: return null
         val shared = sharedMedia(item)
-        val url = publisher.publish(shared.file, receiver.host)
-        return Prefetch(MediaInfo(MediaKind.VIDEO, url, shared.file.mime, shared.title, shared.durationMs), source.playback.positionMs)
+        val file = shared.file ?: return null
+        val url = publisher.publish(file, receiver.host)
+        return Prefetch(MediaInfo(MediaKind.VIDEO, url, file.mime, shared.title, shared.durationMs), source.playback.positionMs)
     }
 
     fun onMediaPicked(uris: List<Uri>) = viewModelScope.launch {

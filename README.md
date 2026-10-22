@@ -23,9 +23,11 @@ Each phase lands through its own pull request.
 | Phase | Goal | State |
 |---|---|---|
 | 0 | Repo + protocol spec | done (#1) |
-| 1 | Shared protocol libraries + mock tools | in review |
-| 2 | Windows receiver MVP | — |
-| 3 | Android sender MVP | — |
-| 4 | Gesture + pointing | — |
-| 5 | Photos, prefetch, polish, demo | — |
+| 1 | Shared protocol libraries + mock tools | accepted (#2) |
+| 2 | Windows receiver MVP | accepted (#3) |
+| 3 | Android sender MVP | accepted (#4) |
+| 4 | Gesture + pointing | accepted (#5, #6, #7) |
+| 5 | Photos, prefetch, polish, demo | in review (#8, #9, Android PR) |
 | 5B | Third-party apps | — |
+
+A walkthrough for recording a demo is in [`docs/demo-script.md`](docs/demo-script.md).

@@ -7,6 +7,12 @@ quick handoff without gestures.
 
 Phase 4 (gestures and pointing) is described in [`AIM_TUNING.md`](AIM_TUNING.md).
 
+Phase 5 adds:
+- **Photos and albums.** Pick several videos or photos at once, swipe left or right to page through them, and once the screen has them the same swipes page on the screen (with a slide).
+- **Instant start.** Once the phone is aimed, `aim_start` carries a prefetch, so the screen has the video loaded at the right second before the swipe arrives.
+- **Auto-reconnect.** If Wi-Fi drops while the screen plays, the screen keeps going. The phone reconnects for up to 20 s and picks up the same video without a restart.
+- **Onboarding.** A first-run walkthrough, plus help when no screen is found.
+
 Kotlin, Jetpack Compose, Media3 ExoPlayer, NsdManager, OkHttp WebSocket, NanoHTTPD. Min SDK 26,
 target 36. The protocol models, codec and state machine come from `shared/kotlin/protocol`, built
 from source as a Gradle composite build.
@@ -16,15 +22,16 @@ from source as a Gradle composite build.
 | Discovery of `_swipeto._tcp` (API 34+ service-info callbacks, queued resolves before that, multicast lock) | `discovery/ReceiverDiscovery.kt` |
 | WebSocket session: state machine both ways, `replyTo` matching, ping/pong, 15 s silence timeout | `net/SenderConnection.kt` |
 | Local media server: `/m/<token>/<fileId>`, Range (206/416), HEAD, plain 404s, token rotates per session | `media/LocalMediaServer.kt`, `media/RangeRequest.kt` |
-| Picked videos served with random access from `content://` | `media/ContentMediaFile.kt` |
-| Connect → pair if needed → hello → publish → handoff → remote → bring back; recovery when the screen or Wi-Fi goes away | `handoff/HandoffCoordinator.kt` |
+| Picked videos and photos served with random access from `content://`; one URL per file and screen until the session ends (prefetch, then handoff) | `media/ContentMediaFile.kt`, `media/ServerPublisher.kt` |
+| Connect → pair if needed → hello → publish → handoff → remote → bring back; album paging; reconnect and re-attach when the connection drops | `handoff/HandoffCoordinator.kt` |
 | Phone id and per-receiver trust tokens | `data/TrustStore.kt` |
 | Player, discovery, Wi-Fi changes | `MainViewModel.kt` |
-| UI: player, screens list, pairing dialog, remote control | `ui/SwipeToScreen.kt` |
+| UI: player or photo, album counter, screens list, pairing dialog, remote control (video or photo, reconnecting) | `ui/SwipeToScreen.kt` |
+| First-run walkthrough | `ui/OnboardingScreen.kt` |
 | Raise-to-aim thresholds and presets (one file) | `aim/AimConfig.kt` |
 | Raise detection from camera elevation; swipe classification | `aim/RaiseToAimDetector.kt`, `aim/SwipeClassifier.kt`, `aim/OrientationSensor.kt` |
 | Target choice: camera QR marker (CameraX + ML Kit), else fallback | `aim/TargetResolver.kt`, `aim/CameraMarkerScanner.kt` |
-| Aim flow: `aim_start` to all paired screens, lock via `aim_ack`, `aim_end` to the rest | `aim/AimController.kt` |
+| Aim flow: `aim_start` to all paired screens, lock via `aim_ack`, `aim_end` to the rest, prefetch to the target | `aim/AimController.kt` |
 | Greeted connections kept ready while the player is in front | `aim/StandbyLinks.kt` |
 | Swipe gestures, fly-up, aim banner, settings sheet, sensor debug panel, haptics | `ui/AimUi.kt`, `ui/SwipeToScreen.kt` |
 
@@ -53,11 +60,18 @@ hasn't already. Open `senders/android` in Android Studio to run it from there in
 gradlew :app:testDebugUnitTest
 ```
 
-JVM tests, no device needed (30 tests):
+JVM tests, no device needed (75 tests, plus 1 opt-in):
 
 - `RangeRequestTest`, `LocalMediaServerTest`: Range parsing; real HTTP against the server (200/206/416/HEAD, wrong token, unknown file, revocation after the session ends).
 - `SenderConnectionTest`: against `FakeReceiver`, a scripted receiver on OkHttp's MockWebServer that runs the real protocol state machine. Covers pairing with retries and cancel, `hello` refusals, handoff, control, pull-back, ping/pong, the silence timeout, and drops.
-- `HandoffCoordinatorTest`: the whole button flow with a fake player. Covers position and play state at handoff, local pause, remote control, bring-back, token reuse and re-pairing, busy and unreachable screens, viewer close on the screen, and continuing on the phone when the screen vanishes.
+- `HandoffCoordinatorTest`: the whole flow with a fake player.
+  - Position and play state at handoff, local pause, remote control and bring-back.
+  - Token reuse and re-pairing.
+  - Busy and unreachable screens, and the viewer closing playback on the screen.
+  - Reconnect and re-handoff of the same URL after a drop.
+  - Continuing on the phone when the screen never comes back.
+  - Album paging with transitions.
+- `AimControllerTest`, `RaiseToAimDetectorTest`, `SwipeAndMarkerTest`, `PointingTest`: raise, pointing, camera lock, prefetch to the target only, and vertical and horizontal swipes.
 - `MockReceiverInteropTest` (opt-in): the same flow against the real .NET mock receiver, Kotlin talking to C# over a socket:
 
   ```
@@ -87,7 +101,7 @@ JVM tests, no device needed (30 tests):
    adb shell am start -n dev.swipeto.sender/.MainActivity
    ```
 
-5. Tap **Pick a video** and choose any video from the gallery. It plays on the phone.
+5. The first run shows a short walkthrough. Then tap **Pick a video or photos** and choose one video, or several photos.
 6. The PC appears under **Screens nearby** (name from the receiver's settings). Tap **Send**.
 7. First time only: the PC shows a 6-digit code; type it on the phone and tap **Pair**.
 8. The PC goes full screen at the same position and the phone shows the remote. Use play/pause,
@@ -110,15 +124,23 @@ These need a real phone, a real network and a person watching:
 - [ ] Remote: play/pause/±10 s/slider act on the PC within ~200 ms; the slider follows the PC.
 - [ ] Bring back: resumes on the phone at the PC's position, playing if it was playing.
 - [ ] Close on the PC (Esc/✕): the phone shows "stopped playing" and is back to local, paused.
-- [ ] Wi-Fi off on the phone mid-playback: within ~15 s the phone continues locally from about
-      where the PC was. Wi-Fi back on: the screens list refreshes.
+- [ ] Wi-Fi off on the phone mid-playback: the phone shows *Reconnecting…* and the PC keeps playing.
+      Wi-Fi back on within 20 s: the remote works again and the PC did not restart the video.
+      Wi-Fi off for longer than 20 s: the phone continues locally from about where the PC was.
+- [ ] Instant start: raise, wait for the glow, swipe up. The PC starts within about half a second
+      (the receiver log says `PREFETCHED`).
+- [ ] Album: pick 5 photos, send one, swipe left and right. The PC slides to the next and previous
+      photos, and the phone shows "n of 5".
+- [ ] Onboarding: a person who has never seen SwipeTo gets from install to a first handoff using
+      only the walkthroughs on both devices.
 - [ ] Rotate the phone during local and remote playback: nothing restarts.
 - [ ] Large phone videos (4K HEVC, long recordings) open and seek on the PC.
 
 ## Known limits (later phases)
 
-- Video only, picked inside the app; photos and albums are Phase 5.
+- Media is picked inside the app; handing off from other apps (Gallery, YouTube) is Phase 5B.
 - The app must stay open while the screen plays (no foreground service yet); Phase 5B adds one.
+- Photos are not prefetched (they open quickly anyway); only the video a swipe would send is.
 - Trust tokens are kept in app-private storage, not the Android Keystore.
 - Cleartext `ws://`/`http://` on the LAN is allowed app-wide (`res/xml/network_security_config.xml`),
   because receiver addresses are only known at run time; protocol v1 has no transport encryption.

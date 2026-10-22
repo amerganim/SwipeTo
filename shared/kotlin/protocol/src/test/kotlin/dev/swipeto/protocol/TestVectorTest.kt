@@ -44,7 +44,7 @@ class TestVectorTest {
         val valid = vectors("valid").map { it.nameWithoutExtension.substringBefore('-') }.toSet()
         val invalid = vectors("invalid").map { it.nameWithoutExtension.substringBefore('-') }.toSet()
 
-        assertEquals(17, MessageTypes.ALL.size)
+        assertEquals(18, MessageTypes.ALL.size)
         for (type in MessageTypes.ALL) {
             assertTrue(type in valid, "no valid vector for $type")
             assertTrue(type in invalid, "no invalid vector for $type")

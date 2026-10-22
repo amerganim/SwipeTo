@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://swipeto.dev/schemas/v1/prepare.schema.json",
+  "title": "prepare",
+  "description": "While the user watches: open this media hidden and muted, in step with positionMs, so a later handoff starts at once.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/envelope"
+    }
+  ],
+  "properties": {
+    "type": {
+      "const": "prepare"
+    },
+    "media": {
+      "$ref": "common.schema.json#/$defs/media"
+    },
+    "positionMs": {
+      "$ref": "common.schema.json#/$defs/positionMs"
+    }
+  },
+  "required": [
+    "type",
+    "media",
+    "positionMs"
+  ],
+  "unevaluatedProperties": false
+}

@@ -73,6 +73,22 @@ public sealed class PrefetchTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Prepare_loads_without_any_aim_and_survives_an_aim_end()
+    {
+        await _client.PrepareAsync(_video, 40_000);
+        await Until(() => _receiver.Playback.Prefetched == _video.Url);
+
+        await _client.AimStartAsync();
+        await _client.AimEndAsync(); // raised and lowered without a swipe: still watching
+        await Task.Delay(200);
+        Assert.Equal(_video.Url, _receiver.Playback.Prefetched);
+
+        Assert.True((await _client.HandoffAsync(_video, 44_000, playing: true)).Accepted);
+        await _client.WaitForStateAsync(s => s.Playing);
+        Assert.Equal(1, _receiver.Playback.PrefetchHits);
+    }
+
+    [Fact]
     public async Task Aim_end_discards_the_prefetch()
     {
         await _client.AimStartAsync(new Prefetch(_video, 42_000));

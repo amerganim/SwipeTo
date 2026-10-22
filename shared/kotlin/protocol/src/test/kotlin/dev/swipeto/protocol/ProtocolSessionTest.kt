@@ -85,6 +85,19 @@ class ProtocolSessionTest {
     }
 
     @Test
+    fun `prepare is for a session without an active handoff`() {
+        assertEquals(ErrorCode.NOT_PAIRED, assertFailsWith<ProtocolException> { screen.incoming(Prepare(video, 1_000)) }.code)
+
+        screen.incoming(Hello(senderId, "Pixel", token, 1))
+        screen.outgoing(HelloAck(receiverId, true))
+        screen.incoming(Prepare(video, 1_000))
+        screen.incoming(Handoff(video, 1_000, true))
+        screen.outgoing(HandoffAck(true))
+
+        assertEquals(ErrorCode.BAD_MESSAGE, assertFailsWith<ProtocolException> { screen.incoming(Prepare(video, 2_000)) }.code)
+    }
+
+    @Test
     fun `control without active handoff is bad_message`() {
         screen.incoming(Hello(senderId, "Pixel", token, 1))
         screen.outgoing(HelloAck(receiverId, true))

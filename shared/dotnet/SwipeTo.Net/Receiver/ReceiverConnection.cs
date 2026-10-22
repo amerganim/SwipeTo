@@ -19,6 +19,7 @@ internal sealed class ReceiverConnection
     private string? _pairingSenderName;
     private string? _senderName;
     private CancellationTokenSource? _aimTimeout;
+    private CancellationTokenSource? _prepared;
     private CancellationTokenSource? _markerRotation;
     private bool _aimLocked;
     private CancellationTokenSource? _stateTicker;
@@ -64,6 +65,7 @@ internal sealed class ReceiverConnection
         Hello m => OnHelloAsync(m),
         AimStart m => OnAimStartAsync(m),
         AimEnd => OnAimEndAsync(),
+        Prepare m => OnPrepareAsync(m),
         Handoff m => OnHandoffAsync(m),
         Control m => OnControlAsync(m),
         PullbackRequest m => OnPullbackAsync(m),
@@ -154,8 +156,42 @@ internal sealed class ReceiverConnection
         {
             if (t.IsCanceled) return;
             HideAim();
-            _host.Playback.DiscardPrefetch();
+            DiscardPrefetchUnlessPrepared();
         }, TaskScheduler.Default);
+    }
+
+    /// <summary>
+    /// The phone is watching this and may hand it to us: load it hidden and muted, in step with it, so a
+    /// later handoff starts at once. Nothing shows. Dropped if the repeats stop.
+    /// </summary>
+    private Task OnPrepareAsync(Prepare prepare)
+    {
+        if (prepare.Media.Kind != MediaKind.Video || !_host.Playback.CanPlay(prepare.Media)) return Task.CompletedTask;
+        if (_prepared is null) _log.LogInformation("Preparing {Title} at {Position} ms", prepare.Media.Title, prepare.PositionMs);
+        _host.Playback.Prefetch(prepare.Media, prepare.PositionMs);
+
+        _prepared?.Cancel();
+        var expiry = _prepared = new CancellationTokenSource();
+        _ = Task.Delay(_options.PrepareTimeout, expiry.Token).ContinueWith(t =>
+        {
+            if (t.IsCanceled) return;
+            _prepared = null;
+            _host.Playback.DiscardPrefetch();
+            _log.LogInformation("Prepared media dropped: no prepare for {Seconds} s", _options.PrepareTimeout.TotalSeconds);
+        }, TaskScheduler.Default);
+        return Task.CompletedTask;
+    }
+
+    private void StopPreparing()
+    {
+        _prepared?.Cancel();
+        _prepared = null;
+    }
+
+    /// <summary>The aim is over; what the phone is still preparing stays loaded.</summary>
+    private void DiscardPrefetchUnlessPrepared()
+    {
+        if (_prepared is null) _host.Playback.DiscardPrefetch();
     }
 
     /// <summary>A new marker nonce every rotation while the marker is up, so a photo of it goes stale.</summary>
@@ -177,12 +213,13 @@ internal sealed class ReceiverConnection
     private Task OnAimEndAsync()
     {
         HideAim();
-        _host.Playback.DiscardPrefetch();
+        DiscardPrefetchUnlessPrepared();
         return Task.CompletedTask;
     }
 
     private async Task OnHandoffAsync(Handoff handoff)
     {
+        StopPreparing(); // a handoff takes what was prepared (or replaces it)
         HideAim();
         if (!_host.Playback.CanPlay(handoff.Media))
         {
@@ -268,7 +305,7 @@ internal sealed class ReceiverConnection
         if (_channel.Session.State != SessionState.HandoffActive || !_host.IsActive(this)) return;
         var snapshot = _host.Playback.Snapshot;
         if (snapshot.Ended) DetachPlayback();
-        await TrySendAsync(new PlaybackState(snapshot.PositionMs, snapshot.Playing, snapshot.Ended));
+        await TrySendAsync(new PlaybackState(snapshot.PositionMs, snapshot.Playing, snapshot.Ended, snapshot.Buffering));
     }
 
     private void StartStateTicker()
@@ -330,9 +367,10 @@ internal sealed class ReceiverConnection
         // The viewer keeps watching if the phone drops; we just stop reporting to it.
         DetachPlayback();
         if (_pairingCode is not null) EndPairing();
-        if (_aimTimeout is not null)
+        if (_aimTimeout is not null) HideAim();
+        if (_aimTimeout is not null || _prepared is not null)
         {
-            HideAim();
+            StopPreparing();
             _host.Playback.DiscardPrefetch();
         }
         if (_senderName is not null) _host.OnSenderDisconnected(_senderName);

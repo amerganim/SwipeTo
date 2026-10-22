@@ -65,7 +65,7 @@ public sealed class ProtocolSession(Role localRole)
         {
             (Role.Sender, SessionState.Connected or SessionState.Paired) => message is PairRequest or Hello,
             (Role.Sender, SessionState.Pairing) => message is PairRequest or PairConfirm,
-            (Role.Sender, SessionState.Session) => message is AimStart or AimEnd or Handoff,
+            (Role.Sender, SessionState.Session) => message is AimStart or AimEnd or Prepare or Handoff,
             (Role.Sender, SessionState.HandoffActive) => message is AimStart or AimEnd or Handoff or Control or PullbackRequest,
             (Role.Receiver, SessionState.Connected or SessionState.Paired) => message is HelloAck,
             (Role.Receiver, SessionState.Pairing) => message is PairResult,
@@ -76,7 +76,7 @@ public sealed class ProtocolSession(Role localRole)
     }
 
     private static bool NeedsSession(Message message) =>
-        message is AimStart or AimEnd or Handoff or Control or PullbackRequest;
+        message is AimStart or AimEnd or Prepare or Handoff or Control or PullbackRequest;
 
     private void Apply(Message message)
     {

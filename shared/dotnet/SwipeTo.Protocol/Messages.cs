@@ -11,6 +11,7 @@ public static class MessageTypes
     public const string AimStart = "aim_start";
     public const string AimEnd = "aim_end";
     public const string AimAck = "aim_ack";
+    public const string Prepare = "prepare";
     public const string Handoff = "handoff";
     public const string HandoffAck = "handoff_ack";
     public const string Control = "control";
@@ -95,6 +96,12 @@ public sealed record AimEnd : Message
     public override string Type => MessageTypes.AimEnd;
 }
 
+/// <summary>While the user watches: open <see cref="Media"/> hidden and muted, in step with <see cref="PositionMs"/>.</summary>
+public sealed record Prepare(MediaInfo Media, long PositionMs) : Message
+{
+    public override string Type => MessageTypes.Prepare;
+}
+
 public sealed record MediaInfo(MediaKind Kind, string Url, string Mime, string Title, long? DurationMs = null);
 
 /// <summary><see cref="Transition"/>: the media follows on from what is showing (album navigation).</summary>
@@ -114,8 +121,11 @@ public sealed record Control(ControlAction Action, long? PositionMs = null) : Me
     public override string Type => MessageTypes.Control;
 }
 
-/// <summary>The <c>state</c> message: receiver playback state.</summary>
-public sealed record PlaybackState(long PositionMs, bool Playing, bool Ended) : Message
+/// <summary>
+/// The <c>state</c> message: receiver playback state. <see cref="Playing"/> is the intent;
+/// <see cref="Buffering"/> says no frames are showing yet.
+/// </summary>
+public sealed record PlaybackState(long PositionMs, bool Playing, bool Ended, bool Buffering = false) : Message
 {
     public override string Type => MessageTypes.State;
 }

@@ -65,10 +65,11 @@ public static partial class MessageCodec
             MessageTypes.AimStart => new AimStart(f.OptionalMatching("nonce", MarkerNoncePattern()), ParsePrefetch(f.OptionalObject("prefetch"))),
             MessageTypes.AimAck => new AimAck(f.Bool("locked")),
             MessageTypes.AimEnd => new AimEnd(),
+            MessageTypes.Prepare => new Prepare(ParseMedia(f.Object("media")), f.Integer("positionMs")),
             MessageTypes.Handoff => new Handoff(ParseMedia(f.Object("media")), f.Integer("positionMs"), f.Bool("playing"), f.OptionalEnum<Transition>("transition")),
             MessageTypes.HandoffAck => new HandoffAck(f.Bool("accepted"), f.OptionalEnum<ErrorCode>("reason")),
             MessageTypes.Control => new Control(f.Enum<ControlAction>("action"), f.OptionalInteger("positionMs")),
-            MessageTypes.State => new PlaybackState(f.Integer("positionMs"), f.Bool("playing"), f.Bool("ended")),
+            MessageTypes.State => new PlaybackState(f.Integer("positionMs"), f.Bool("playing"), f.Bool("ended"), f.OptionalBool("buffering") ?? false),
             MessageTypes.PullbackRequest => new PullbackRequest(),
             MessageTypes.Pullback => new Pullback(f.Integer("positionMs"), f.Bool("playing")),
             MessageTypes.Ping => new Ping(),
@@ -192,6 +193,7 @@ public static partial class MessageCodec
                 w.WriteNumber("positionMs", m.PositionMs);
                 w.WriteBoolean("playing", m.Playing);
                 w.WriteBoolean("ended", m.Ended);
+                if (m.Buffering) w.WriteBoolean("buffering", true);
                 break;
             case Pullback m:
                 w.WriteNumber("positionMs", m.PositionMs);
@@ -213,6 +215,10 @@ public static partial class MessageCodec
                 break;
             case AimAck m:
                 w.WriteBoolean("locked", m.Locked);
+                break;
+            case Prepare m:
+                WriteMedia(w, m.Media);
+                w.WriteNumber("positionMs", m.PositionMs);
                 break;
             case AimEnd or PullbackRequest or Ping or Pong:
                 break;
@@ -302,6 +308,8 @@ public static partial class MessageCodec
         }
 
         public long? OptionalInteger(string name) => Get(name) is null ? null : Integer(name);
+
+        public bool? OptionalBool(string name) => Get(name) is null ? null : Bool(name);
 
         public bool Bool(string name) => Required(name).ValueKind switch
         {

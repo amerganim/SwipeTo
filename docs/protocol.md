@@ -99,7 +99,7 @@ sides to *Session*.
 | Connected | `pair_request`, `hello` | `hello_ack` |
 | Pairing | `pair_request`, `pair_confirm` | `pair_result` |
 | Paired | `hello` | `hello_ack` |
-| Session | `aim_start`, `aim_end`, `handoff` | `aim_ack`, `handoff_ack`, `state` |
+| Session | `aim_start`, `aim_end`, `prepare`, `handoff` | `aim_ack`, `handoff_ack`, `state` |
 | HandoffActive | `aim_start`, `aim_end`, `handoff`, `control`, `pullback_request` | `aim_ack`, `handoff_ack`, `state`, `pullback` |
 | *any* | `ping`, `pong`, `error` | `ping`, `pong`, `error` |
 
@@ -232,6 +232,31 @@ start opening that media at that position, paused and unseen, so that the
 
 A receiver with nothing to gain (or not enough memory) may ignore `prefetch`.
 
+**Prepare (before any aim).** Over Wi-Fi a receiver can need a few seconds to
+buffer enough of a video to start, longer than the moment between raising the
+phone and swiping. So while the user watches, a phone MAY send `prepare` to
+**one** paired receiver it expects to hand off to (for example the last one
+used), in *Session*:
+
+| Message | Direction | Payload |
+|---|---|---|
+| `prepare` | S → R | `media` (as in `handoff`), `positionMs`: what is playing on the phone and where |
+
+The receiver SHOULD open that media hidden and muted and keep it playing in
+step with `positionMs`, without any glow or other visible sign, so that a
+later `handoff` of the same `url` only has to show it. Rules:
+
+- the phone repeats `prepare` about every **4 s** while it keeps playing that
+  media; the receiver drops what it prepared **10 s** after the last one, on a
+  `prepare` or `handoff` of a different `url`, on `aim_end` or the aim timeout
+  only if no `prepare` arrived within those 10 s, and on session end;
+- it is a hint like `prefetch`: the receiver MUST NOT show or play prepared
+  media audibly without a `handoff`;
+- a phone SHOULD only prepare on a receiver the user has handed off to before,
+  SHOULD let the user turn preparing off, and MUST NOT send `prepare` over a
+  metered connection (it costs the receiver roughly the media's bitrate);
+- the URL is served exactly as for a `handoff`.
+
 `aim_end` hides glow and marker. A receiver MUST also hide them on `handoff`,
 on session end, and after **10 s** without a new `aim_start`.
 
@@ -272,6 +297,12 @@ sequenceDiagram
 
 `positionMs` is where playback must continue (0 for images). `playing` says
 whether to play or stay paused at that position.
+
+**Overlap.** With `playing: true`, a sender SHOULD keep playing locally until
+the receiver reports `state {playing: true, buffering: false}` (section 5.5),
+so the viewer never sees nor hears a gap. Because the phone kept playing
+meanwhile, a receiver that needed time to load SHOULD start at `positionMs`
+plus the time since the `handoff` arrived.
 
 The sender's media `url` has the form
 `http://<phoneIp>:<port>/m/<sessionToken>/<fileId>`. The sender's media server:
@@ -327,7 +358,7 @@ sequenceDiagram
 | Message | Direction | Payload |
 |---|---|---|
 | `control` | S → R | `action` ∈ `play`, `pause`, `seek`, `stop`; `positionMs` required for `seek`, ignored otherwise |
-| `state` | R → S | `positionMs`, `playing`, `ended` |
+| `state` | R → S | `positionMs`, `playing`, `ended`; optional `buffering` |
 
 - `stop` ends playback on the receiver and closes the player; the receiver
   sends a final `state {ended: true}` and returns to *Session*.
@@ -337,6 +368,10 @@ sequenceDiagram
 - When the user closes playback on the receiver (Esc / close button), the
   receiver sends `state {ended: true, playing: false}` and returns to *Session*.
 - `control` outside *HandoffActive* gets `error {code: "bad_message"}`.
+- `playing` is the receiver's intent; `buffering: true` says it is not yet
+  showing frames (still opening, or waiting for data). Absent means `false`.
+  The first `state` with `playing: true` and no `buffering` after a `handoff`
+  is the moment the viewer sees the video on the screen.
 - `handoff_ack` is sent before the media loads, so the first `state` after it is
   the signal that playback has started. A receiver MAY ignore `control` that
   arrives before that first `state`; senders SHOULD wait for it.

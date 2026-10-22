@@ -140,8 +140,9 @@ class HandoffCoordinator(
         try {
             if (greeted == null && !helloOrPair(conn, target)) return false
 
-            // A video that already finished here starts over there.
-            val finished = media.durationMs?.let { local.positionMs >= it - END_SLACK_MS } ?: false
+            // A video that finished here, or is about to, starts over there (an 8 s clip handed off at
+            // 7 s ended on the laptop at once: seen on the A15 test phone).
+            val finished = media.durationMs?.let { local.positionMs >= it - NEAR_END_MS } ?: false
             val timed = media.kind != MediaKind.IMAGE
             val playing = timed && (local.isPlaying || finished)
             val position = if (timed && !finished) local.positionMs else 0L
@@ -432,8 +433,8 @@ class HandoffCoordinator(
     }
 
     private companion object {
-        /** Within this of the end counts as finished. */
-        const val END_SLACK_MS = 500L
+        /** Within this of the end counts as finished: the screen starts over. */
+        const val NEAR_END_MS = 5_000L
 
         /** One reconnect attempt: hello and handoff answered within this. */
         const val REJOIN_TIMEOUT_MS = 5_000L
@@ -444,7 +445,7 @@ class HandoffCoordinator(
         ErrorCode.UNSUPPORTED_MEDIA -> "$name can't play this file. Try another video or photo."
         ErrorCode.VERSION_MISMATCH -> "$name needs a different SwipeTo version."
         ErrorCode.NOT_PAIRED -> "$name doesn't recognise this phone. Pair again."
-        ErrorCode.SERVICE_UNAVAILABLE -> "$name couldn't find this video on YouTube. Check its YouTube API key in its Settings."
+        ErrorCode.SERVICE_UNAVAILABLE -> "$name needs the video's link: in YouTube tap Share → SwipeTo (or add a YouTube API key in $name's SwipeTo Settings)."
         else -> "$name said no."
     }
 

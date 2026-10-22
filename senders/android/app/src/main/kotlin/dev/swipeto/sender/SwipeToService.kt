@@ -128,6 +128,12 @@ class SwipeToService : Service() {
                 vibrator?.vibrate(android.os.VibrationEffect.createPredefined(effect))
             }
         }
+        scope.launch {
+            // Refusals and hints while another app is in front: SwipeTo's own screen can't show them.
+            kotlinx.coroutines.flow.merge(engine.notices, engine.hints).collect { text ->
+                if (!engine.inFront) android.widget.Toast.makeText(this@SwipeToService, text, android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
         EventLog.i("background service started (bubble ${if (bubble.canShow) "allowed" else "NOT allowed: no overlay permission"})")
     }
 

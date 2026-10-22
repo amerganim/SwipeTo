@@ -459,6 +459,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun source(): Source? = if (foreground) _media.value?.let { Source(it, inAppPlayback) } else _external.value
 
+    /** SwipeTo's own screen is in front (it shows notices itself). */
+    val inFront: Boolean get() = foreground
+
     /** Sensors, links and preparing run while SwipeTo is in front, another app plays something sendable, or a gallery is open. */
     private val active: Boolean get() = foreground || _external.value != null || _galleryOpen.value
 

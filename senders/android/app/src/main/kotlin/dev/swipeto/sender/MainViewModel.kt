@@ -21,6 +21,7 @@ import dev.swipeto.protocol.MediaKind
 import dev.swipeto.protocol.Prefetch
 import dev.swipeto.protocol.Prepare
 import dev.swipeto.sender.aim.Preparer
+import dev.swipeto.sender.apps.ActiveMediaWatcher
 import dev.swipeto.protocol.Transition
 import dev.swipeto.sender.aim.AimConfig
 import dev.swipeto.sender.aim.AimController
@@ -121,6 +122,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val files = mutableMapOf<Uri, ContentMediaFile>()
     private val connectivity = app.getSystemService(ConnectivityManager::class.java)
     val settings = AppSettings(app)
+
+    /** What other apps are playing (Phase 5B); empty until the user grants Notification access. */
+    val mediaWatcher = ActiveMediaWatcher(app) { EventLog.i(it) }
+    private val _mediaAccess = MutableStateFlow(mediaWatcher.hasAccess)
+    val mediaAccess: StateFlow<Boolean> = _mediaAccess.asStateFlow()
     private val orientation = OrientationSensor(app)
     private val detector = RaiseToAimDetector()
     val swipes = SwipeClassifier()
@@ -293,6 +299,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** From the activity: sensors, camera and standby links run only while the app is in front. */
     fun setForeground(value: Boolean) {
+        if (value) {
+            // Coming back from Android's access screen picks up a fresh grant.
+            _mediaAccess.value = mediaWatcher.hasAccess
+            mediaWatcher.start()
+        }
         foreground = value
         EventLog.i(if (value) "app in front" else "app in background")
         if (value) {
@@ -634,6 +645,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
+        mediaWatcher.stop()
         preparer.stop()
         stopAiming()
         coordinator.takeBackNow()

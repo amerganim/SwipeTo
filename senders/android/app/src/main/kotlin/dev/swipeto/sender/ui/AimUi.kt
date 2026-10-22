@@ -125,7 +125,7 @@ fun AimBanner(state: AimState, modifier: Modifier = Modifier) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsSheet(settings: AppSettings, bottomInset: Dp, onDismiss: () -> Unit) {
+fun SettingsSheet(settings: AppSettings, bottomInset: Dp, onDismiss: () -> Unit, extra: @Composable () -> Unit = {}) {
     val sensitivity by settings.sensitivity.collectAsStateWithLifecycle()
     val raise by settings.raiseToAim.collectAsStateWithLifecycle()
     val camera by settings.cameraTargeting.collectAsStateWithLifecycle()
@@ -168,6 +168,7 @@ fun SettingsSheet(settings: AppSettings, bottomInset: Dp, onDismiss: () -> Unit)
                 settings::setCameraTargeting,
             )
             SettingSwitch("Sensor debug", "Show live sensor values and an Aim button.", debug, settings::setDebugOverlay)
+            extra()
             Spacer(Modifier.size(24.dp))
         }
     }

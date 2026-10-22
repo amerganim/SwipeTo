@@ -23,7 +23,20 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
     /// <summary>A playing prefetch this close to the handoff position is shown without a seek.</summary>
     private const long WarmToleranceMs = 400;
     private static readonly HashSet<string> ImageTypes = ["image/jpeg", "image/png", "image/gif", "image/bmp", "image/webp", "image/tiff"];
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(15) };
+    /// <summary>
+    /// For the phone's media server. Fails fast so <see cref="HttpRangeStream"/> retries soon: after a
+    /// Wi-Fi blip on the A15 a request on a pooled connection that died with it hung for the whole
+    /// timeout, freezing the picture after the phone was back. Blocks are 512 KiB; even at 1 MB/s
+    /// that is half a second.
+    /// </summary>
+    private static readonly HttpClient Http = new(new SocketsHttpHandler
+    {
+        ConnectTimeout = TimeSpan.FromSeconds(3),
+        PooledConnectionIdleTimeout = TimeSpan.FromSeconds(5),
+    })
+    {
+        Timeout = TimeSpan.FromSeconds(6),
+    };
 
     private readonly object _gate = new();
 

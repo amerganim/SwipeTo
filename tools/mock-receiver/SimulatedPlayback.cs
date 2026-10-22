@@ -26,12 +26,47 @@ public sealed class SimulatedPlayback(HttpClient http) : IPlaybackTarget
 
     public MediaInfo? Current { get; private set; }
 
+    public string? CurrentUrl => Current?.Url;
+
+    /// <summary>URL prefetched (the first bytes already fetched), or null.</summary>
+    public string? Prefetched { get; private set; }
+
+    /// <summary>Handoffs whose media had been prefetched, for tests.</summary>
+    public int PrefetchHits { get; private set; }
+
+    public Transition? LastTransition { get; private set; }
+
+    public void Prefetch(MediaInfo media, long positionMs)
+    {
+        if (Prefetched == media.Url) return;
+        Prefetched = media.Url;
+        Console.WriteLine($"[player] prefetching \"{media.Title}\" at {positionMs} ms");
+        _ = FetchRangeAsync(media.Url, 0, 1023, CancellationToken.None).ContinueWith(_ => { }, TaskScheduler.Default);
+    }
+
+    public void DiscardPrefetch()
+    {
+        if (Prefetched is null) return;
+        Prefetched = null;
+        Console.WriteLine("[player] prefetch discarded");
+    }
+
     public bool CanPlay(MediaInfo media) => media.Kind == MediaKind.Video || media.Kind == MediaKind.Image;
 
-    public async Task LoadAsync(MediaInfo media, long positionMs, bool playing, CancellationToken ct)
+    public async Task LoadAsync(MediaInfo media, long positionMs, bool playing, Transition? transition, CancellationToken ct)
     {
-        var total = await FetchRangeAsync(media.Url, 0, 1023, ct);
-        if (total is > 4096) await FetchRangeAsync(media.Url, total.Value / 2, total.Value / 2 + 1023, ct);
+        LastTransition = transition;
+        if (Prefetched == media.Url)
+        {
+            PrefetchHits++;
+            Prefetched = null;
+        }
+        else
+        {
+            Prefetched = null;
+            var total = await FetchRangeAsync(media.Url, 0, 1023, ct);
+            if (total is > 4096) await FetchRangeAsync(media.Url, total.Value / 2, total.Value / 2 + 1023, ct);
+        }
 
         lock (_gate)
         {

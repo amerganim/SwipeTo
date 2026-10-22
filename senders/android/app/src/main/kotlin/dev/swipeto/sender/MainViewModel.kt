@@ -20,7 +20,6 @@ import dev.swipeto.sender.aim.AimPhase
 import dev.swipeto.sender.aim.AimState
 import dev.swipeto.sender.aim.CameraMarkerResolver
 import dev.swipeto.sender.aim.CameraMarkerScanner
-import dev.swipeto.sender.aim.ChainResolver
 import dev.swipeto.sender.aim.FallbackResolver
 import dev.swipeto.sender.aim.LinkTarget
 import dev.swipeto.sender.aim.OrientationSensor
@@ -147,16 +146,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         scope = viewModelScope,
         links = links,
         candidates = { pairedTargets().map { it to trust.lastUsed(it.id) } },
-        resolver = ChainResolver(
-            listOf(
-                CameraMarkerResolver(
-                    scanner,
-                    timeoutMs = { AimConfig.forSensitivity(settings.sensitivity.value).markerSearchMs },
-                    enabled = { settings.cameraTargeting.value },
-                ),
-                FallbackResolver,
-            ),
+        preferred = CameraMarkerResolver(
+            scanner,
+            timeoutMs = { AimConfig.forSensitivity(settings.sensitivity.value).markerSearchMs },
+            enabled = { settings.cameraTargeting.value },
         ),
+        fallback = FallbackResolver,
         onLocked = { _haptics.tryEmit(Haptic.TARGET_LOCKED) },
         log = { Log.i(TAG, it) },
     )
@@ -244,7 +239,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Debug overlay: behave as if the phone had just been raised (or lowered). */
-    fun simulateAim(start: Boolean) = if (start) aim.onAimStart() else aim.onAimEnd()
+    fun simulateAim(start: Boolean) = if (start) aim.onAimStart() else aim.endNow()
 
     private suspend fun swipeUp(): Boolean {
         val picked = _video.value ?: return false
@@ -323,7 +318,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         aimJob?.cancel()
         aimJob = null
         detector.reset()
-        if (aimState.value !is AimState.Idle) aim.onAimEnd()
+        if (aimState.value !is AimState.Idle) aim.endNow()
         _aimDebug.value = _aimDebug.value.copy(phase = AimPhase.IDLE)
     }
 

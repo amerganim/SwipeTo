@@ -39,7 +39,11 @@ class AimControllerTest {
     private val identity = SenderIdentity("a1b2c3d4-e5f6-4789-8abc-def012345678", "Phone")
     private val links = StandbyLinks(scope, trust, { url -> SenderConnection.connect(url, identity) })
     private var seen: MarkerPayload? = null
-    private val camera = CameraMarkerResolver(MarkerScanner { _, accept -> seen?.takeIf(accept) }, timeoutMs = { 300 })
+    private var cameraDelayMs = 0L
+    private val camera = CameraMarkerResolver(MarkerScanner { _, accept ->
+        delay(cameraDelayMs)
+        seen?.takeIf(accept)
+    }, timeoutMs = { 2_000 })
 
     init {
         desk.issuedTokens += "desk_token_abcdefghijklmnopq"
@@ -57,14 +61,14 @@ class AimControllerTest {
     }
 
     private fun controller(screens: List<Pair<LinkTarget, Long?>>) =
-        AimController(scope, links, { screens }, ChainResolver(listOf(camera, FallbackResolver)))
+        AimController(scope, links, { screens }, preferred = camera, fallback = FallbackResolver, graceMs = 300)
 
     private suspend fun AimController.settled(): AimState = withTimeout(5_000) {
         state.first { it is AimState.Targeted || it is AimState.NoScreens }
     }
 
     @Test
-    fun `camera marker picks the screen in front, it locks, the other stops glowing`() = runBlocking {
+    fun `camera marker picks the screen in front, it locks, the other stops glowing`() = runBlocking<Unit> {
         seen = MarkerPayload(tvTarget.id, "TvMarkerNonce000001")
         val aim = controller(listOf(deskTarget to null, tvTarget to null))
 
@@ -80,7 +84,7 @@ class AimControllerTest {
     }
 
     @Test
-    fun `stale marker still targets but is not verified`() = runBlocking {
+    fun `stale marker still targets but is not verified`() = runBlocking<Unit> {
         seen = MarkerPayload(deskTarget.id, "PhotoOfAnOldMarker01")
         val aim = controller(listOf(deskTarget to null, tvTarget to null))
 
@@ -93,7 +97,7 @@ class AimControllerTest {
     }
 
     @Test
-    fun `without a marker, the only screen is the target`() = runBlocking {
+    fun `without a marker, the only screen is the target`() = runBlocking<Unit> {
         val aim = controller(listOf(deskTarget to null))
 
         aim.onAimStart()
@@ -104,7 +108,7 @@ class AimControllerTest {
     }
 
     @Test
-    fun `without a marker and with several screens, the most recently used wins`() = runBlocking {
+    fun `without a marker and with several screens, the most recently used wins`() = runBlocking<Unit> {
         val aim = controller(listOf(deskTarget to 1_000L, tvTarget to 5_000L))
 
         aim.onAimStart()
@@ -113,7 +117,7 @@ class AimControllerTest {
     }
 
     @Test
-    fun `lowering the phone ends the aim everywhere`() = runBlocking {
+    fun `lowering the phone ends the aim everywhere`() = runBlocking<Unit> {
         val aim = controller(listOf(deskTarget to null))
         aim.onAimStart()
         aim.settled()
@@ -121,11 +125,70 @@ class AimControllerTest {
         aim.onAimEnd()
 
         withTimeout(5_000) { while (desk.glowing) delay(20) }
-        assertEquals(AimState.Idle, aim.state.value)
+        withTimeout(1_000) { aim.state.first { it == AimState.Idle } }
     }
 
     @Test
-    fun `no paired screen reachable`() = runBlocking {
+    fun `a single screen is the target at once, and the camera upgrades it to verified`() = runBlocking<Unit> {
+        cameraDelayMs = 800
+        seen = MarkerPayload(deskTarget.id, "DeskMarkerNonce0001")
+        val aim = controller(listOf(deskTarget to null))
+
+        aim.onAimStart()
+        val first = withTimeout(500) { aim.state.first { it is AimState.Targeted } } as AimState.Targeted
+        assertEquals(ResolvedBy.ONLY_SCREEN, first.by)
+        assertFalse(first.verified)
+
+        val upgraded = withTimeout(3_000) { aim.state.first { it is AimState.Targeted && it.verified } } as AimState.Targeted
+        assertEquals(ResolvedBy.CAMERA, upgraded.by)
+        assertTrue(desk.locked)
+    }
+
+    @Test
+    fun `a swipe while still searching among several screens takes the most recent`() = runBlocking<Unit> {
+        cameraDelayMs = 3_000 // the camera has not found anything yet
+        val aim = controller(listOf(deskTarget to 1_000L, tvTarget to 5_000L))
+        aim.onAimStart()
+        withTimeout(2_000) { aim.state.first { it is AimState.Searching } }
+
+        val (target, conn) = aim.takeTarget()!!
+
+        assertEquals("TV", target.name)
+        assertTrue(!conn.closed.value)
+        withTimeout(5_000) { while (desk.glowing) delay(20) }
+    }
+
+    @Test
+    fun `a swipe just after lowering still gets the target`() = runBlocking<Unit> {
+        val aim = controller(listOf(deskTarget to null))
+        aim.onAimStart()
+        aim.settled()
+
+        aim.onAimEnd() // the swipe tipped the phone down
+        val taken = aim.takeTarget()
+
+        assertEquals("Desk", taken!!.first.name)
+        delay(400) // past the grace period: still no aim_end, the handoff will hide the glow
+        assertTrue(desk.received.none { it is dev.swipeto.protocol.AimEnd })
+    }
+
+    @Test
+    fun `raising again within the grace period keeps the target`() = runBlocking<Unit> {
+        val aim = controller(listOf(deskTarget to null))
+        aim.onAimStart()
+        aim.settled()
+
+        aim.onAimEnd()
+        delay(100)
+        aim.onAimStart()
+        delay(500)
+
+        assertTrue(aim.state.value is AimState.Targeted)
+        assertTrue(desk.glowing)
+    }
+
+    @Test
+    fun `no paired screen reachable`() = runBlocking<Unit> {
         val offline = LinkTarget(deskTarget.id, "Desk", "ws://127.0.0.1:1/v1")
         val aim = controller(listOf(offline to null))
 
@@ -135,7 +198,7 @@ class AimControllerTest {
     }
 
     @Test
-    fun `swipe-up hands off over the aimed connection without a second hello`() = runBlocking {
+    fun `swipe-up hands off over the aimed connection without a second hello`() = runBlocking<Unit> {
         val aim = controller(listOf(deskTarget to null))
         aim.onAimStart()
         aim.settled()

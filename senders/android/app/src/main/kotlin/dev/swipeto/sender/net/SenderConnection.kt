@@ -27,6 +27,8 @@ import dev.swipeto.protocol.AimAck
 import dev.swipeto.protocol.AimEnd
 import dev.swipeto.protocol.AimStart
 import dev.swipeto.protocol.Control
+import dev.swipeto.protocol.Prefetch
+import dev.swipeto.protocol.Transition
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -107,14 +109,16 @@ class SenderConnection private constructor(
     suspend fun hello(trustToken: String): HelloAck =
         request(Hello(identity.senderId, identity.senderName, trustToken, ProtocolVersion.CURRENT))
 
-    fun aimStart() = send(AimStart())
+    /** Glow (and marker) on the screen; [prefetch] lets it start loading what a swipe would send. */
+    fun aimStart(prefetch: Prefetch? = null) = send(AimStart(prefetch = prefetch))
 
     /** Reports the marker nonce the camera read; the screen answers whether it locks. */
     suspend fun lock(nonce: String): AimAck = request(AimStart(nonce))
 
     fun aimEnd() = send(AimEnd())
 
-    suspend fun handoff(media: MediaInfo, positionMs: Long, playing: Boolean): HandoffAck = request(Handoff(media, positionMs, playing))
+    suspend fun handoff(media: MediaInfo, positionMs: Long, playing: Boolean, transition: Transition? = null): HandoffAck =
+        request(Handoff(media, positionMs, playing, transition))
 
     fun control(action: ControlAction, positionMs: Long? = null) = send(Control(action, positionMs))
 

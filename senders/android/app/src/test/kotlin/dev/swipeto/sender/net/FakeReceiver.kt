@@ -55,6 +55,9 @@ class FakeReceiver(
         private set
     var lastHandoff: Handoff? = null
         private set
+    val handoffs = CopyOnWriteArrayList<Handoff>()
+    @Volatile var connections = 0
+        private set
     @Volatile var glowing = false
         private set
     @Volatile var locked = false
@@ -63,7 +66,7 @@ class FakeReceiver(
     val url: String
 
     init {
-        repeat(4) { server.enqueue(MockResponse.Builder().webSocketUpgrade(Listener()).build()) }
+        repeat(8) { server.enqueue(MockResponse.Builder().webSocketUpgrade(Listener()).build()) }
         server.start()
         url = server.url("/v1").toString().replaceFirst("http", "ws")
     }
@@ -103,6 +106,7 @@ class FakeReceiver(
             this.webSocket = webSocket
             socket = webSocket
             current = this
+            connections++
         }
 
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -144,6 +148,7 @@ class FakeReceiver(
                         reply(HandoffAck(false, ErrorCode.BUSY, replyTo = message.id))
                     } else {
                         lastHandoff = message
+                        handoffs += message
                         positionMs = message.positionMs
                         playing = message.playing
                         reply(HandoffAck(true, replyTo = message.id))

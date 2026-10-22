@@ -1,6 +1,7 @@
 package dev.swipeto.sender.handoff
 
 import dev.swipeto.protocol.MediaKind
+import dev.swipeto.protocol.Transition
 import dev.swipeto.sender.data.TrustTokens
 import dev.swipeto.sender.media.MediaFile
 import dev.swipeto.sender.net.FakeReceiver
@@ -34,7 +35,7 @@ class HandoffCoordinatorTest {
     private val target = Target("0e1d2c3b-4a59-4687-9a8b-7c6d5e4f3a21", "Desk", receiver.url, InetAddress.getLoopbackAddress())
     private val media = SharedMedia(FakeFile, MediaKind.VIDEO, "Beach day", 180_000)
 
-    private fun newCoordinator(stateTimeoutMs: Long = 60_000) = HandoffCoordinator(
+    private fun newCoordinator(stateTimeoutMs: Long = 60_000, reconnectWindowMs: Long = 0) = HandoffCoordinator(
         trust = trust,
         publisher = publisher,
         local = local,
@@ -42,6 +43,8 @@ class HandoffCoordinatorTest {
         scope = scope,
         connect = { url -> SenderConnection.connect(url, SenderIdentity("a1b2c3d4-e5f6-4789-8abc-def012345678", "Phone")) },
         stateTimeoutMs = stateTimeoutMs,
+        reconnectWindowMs = reconnectWindowMs,
+        reconnectRetryMs = 200,
     )
 
     // FakeReceiver reports state on events only, not every second, so the default leaves the watchdog out of the way.
@@ -149,7 +152,81 @@ class HandoffCoordinatorTest {
     }
 
     @Test
-    fun `losing the screen continues on the phone near where it was`() = runBlocking {
+    fun `a dropped connection reconnects and hands off the same media where the screen should be`() = runBlocking {
+        val resilient = newCoordinator(reconnectWindowMs = 5_000)
+        assertTrue(resilient.sendTo(target, media))
+        withTimeout(5_000) { resilient.state.first { it is LinkState.Remote && it.playing } }
+        delay(300)
+
+        receiver.drop()
+
+        withTimeout(5_000) { resilient.state.first { it is LinkState.Remote && it.reconnecting } }
+        val back = withTimeout(5_000) { resilient.state.first { it is LinkState.Remote && !it.reconnecting } } as LinkState.Remote
+        assertEquals(2, receiver.connections)
+        assertEquals(2, receiver.handoffs.size)
+        assertEquals(receiver.handoffs[0].media.url, receiver.handoffs[1].media.url) // same URL: the screen re-attaches
+        assertTrue(receiver.handoffs[1].positionMs in 42_200..44_000, "re-handed off at ${receiver.handoffs[1].positionMs}")
+        assertTrue(back.playing)
+        assertEquals(0, publisher.ended) // the file stayed served throughout
+        assertFalse(local.isPlaying)
+
+        // Still a working remote on the new connection.
+        resilient.togglePlay()
+        withTimeout(5_000) { resilient.state.first { it is LinkState.Remote && !it.playing } }
+    }
+
+    @Test
+    fun `a screen that never comes back hands the video back to the phone after the reconnect window`() = runBlocking {
+        val resilient = newCoordinator(reconnectWindowMs = 1_000)
+        assertTrue(resilient.sendTo(target, media))
+        withTimeout(5_000) { resilient.state.first { it is LinkState.Remote && it.playing } }
+
+        receiver.close() // the screen is switched off: connecting fails from now on
+
+        withTimeout(10_000) { resilient.state.first { it == LinkState.Idle } }
+        assertTrue(local.isPlaying)
+        assertTrue(local.positionMs >= 42_000)
+        assertEquals(1, publisher.ended)
+    }
+
+    @Test
+    fun `bring back while reconnecting resumes on the phone at once`() = runBlocking {
+        val resilient = newCoordinator(reconnectWindowMs = 30_000)
+        assertTrue(resilient.sendTo(target, media))
+        withTimeout(5_000) { resilient.state.first { it is LinkState.Remote && it.playing } }
+        receiver.close()
+        withTimeout(5_000) { resilient.state.first { it is LinkState.Remote && it.reconnecting } }
+
+        resilient.bringBack()
+
+        assertEquals(LinkState.Idle, resilient.state.value)
+        assertTrue(local.isPlaying)
+    }
+
+    @Test
+    fun `album photos are paged on the screen with their transition`() = runBlocking {
+        val first = SharedMedia(FakeFile, MediaKind.IMAGE, "IMG_1", null)
+        val second = SharedMedia(FakeFile, MediaKind.IMAGE, "IMG_2", null)
+        assertTrue(coordinator.sendTo(target, first))
+        assertEquals(0, receiver.lastHandoff!!.positionMs)
+        assertFalse(receiver.lastHandoff!!.playing)
+
+        assertTrue(coordinator.show(second, Transition.NEXT))
+
+        assertEquals(Transition.NEXT, receiver.lastHandoff!!.transition)
+        assertEquals("IMG_2", receiver.lastHandoff!!.media.title)
+        val remote = coordinator.state.value as LinkState.Remote
+        assertEquals("IMG_2", remote.title)
+        assertEquals(MediaKind.IMAGE, remote.kind)
+    }
+
+    @Test
+    fun `album paging needs the screen to have the media`() = runBlocking {
+        assertFalse(coordinator.show(media, Transition.NEXT))
+    }
+
+    @Test
+    fun `losing the screen with reconnecting off continues on the phone near where it was`() = runBlocking {
         coordinator.sendTo(target, media)
         awaitRemote { it.playing }
         delay(300)

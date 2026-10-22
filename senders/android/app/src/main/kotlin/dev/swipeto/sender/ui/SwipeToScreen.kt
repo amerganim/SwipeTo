@@ -69,6 +69,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.ui.PlayerView
+import dev.swipeto.protocol.MediaKind
+import dev.swipeto.sender.Album
 import dev.swipeto.sender.MainViewModel
 import dev.swipeto.sender.PairingRequest
 import dev.swipeto.sender.ReceiverItem
@@ -89,10 +91,16 @@ import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.material.icons.filled.SyncProblem
 
 @Composable
 fun SwipeToScreen(viewModel: MainViewModel) {
-    val video by viewModel.video.collectAsStateWithLifecycle()
+    val video by viewModel.media.collectAsStateWithLifecycle()
+    val album by viewModel.album.collectAsStateWithLifecycle()
+    val onboarded by viewModel.settings.onboarded.collectAsStateWithLifecycle()
     val link by viewModel.link.collectAsStateWithLifecycle()
     val receivers by viewModel.receivers.collectAsStateWithLifecycle()
     val pairing by viewModel.pairing.collectAsStateWithLifecycle()
@@ -113,12 +121,16 @@ fun SwipeToScreen(viewModel: MainViewModel) {
         if (needsCamera && video != null) cameraPermission.launch(Manifest.permission.CAMERA)
     }
 
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) viewModel.onVideoPicked(uri)
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(MAX_PICK)) { uris ->
+        if (uris.isNotEmpty()) viewModel.onMediaPicked(uris)
     }
-    val pickVideo = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) }
+    val pickVideo = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) }
 
     val scope = rememberCoroutineScope()
+    if (!onboarded) {
+        OnboardingScreen(onDone = viewModel::finishOnboarding)
+        return
+    }
     Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -128,15 +140,16 @@ fun SwipeToScreen(viewModel: MainViewModel) {
             when (val state = link) {
                 is LinkState.Remote -> RemoteControl(
                     state = state,
+                    album = album,
                     onTogglePlay = viewModel::togglePlay,
                     onSeek = viewModel::seekTo,
                     onBringBack = { viewModel.bringBack() },
-                    modifier = Modifier.verticalSwipes(viewModel.swipes) { swipe ->
-                        if (swipe == Swipe.DOWN) scope.launch { viewModel.onSwipe(swipe) }
+                    modifier = Modifier.swipes(viewModel.swipes, horizontal = album?.isAlbum == true) { swipe ->
+                        if (swipe != Swipe.UP) scope.launch { viewModel.onSwipe(swipe) }
                     },
                 )
                 else -> {
-                    VideoArea(viewModel, hasVideo = video != null, aim = aim, onPick = pickVideo)
+                    VideoArea(viewModel, hasVideo = video != null, album = album, aim = aim, onPick = pickVideo)
                     if (debugOn) DebugPanel(aimDebug, aim, viewModel::simulateAim, viewModel::forgetDirections)
                     video?.let {
                         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -150,6 +163,7 @@ fun SwipeToScreen(viewModel: MainViewModel) {
                         canSend = video != null && state is LinkState.Idle,
                         onSend = { viewModel.sendTo(it.receiver) },
                     )
+                    if (receivers.isEmpty()) NoScreensHelp()
                 }
             }
         }
@@ -161,8 +175,10 @@ fun SwipeToScreen(viewModel: MainViewModel) {
 }
 
 @Composable
-private fun VideoArea(viewModel: MainViewModel, hasVideo: Boolean, aim: AimState, onPick: () -> Unit) {
+private fun VideoArea(viewModel: MainViewModel, hasVideo: Boolean, album: Album?, aim: AimState, onPick: () -> Unit) {
     val scope = rememberCoroutineScope()
+    val photo by viewModel.photo.collectAsStateWithLifecycle()
+    val isPhoto = album?.current?.kind == MediaKind.IMAGE
     val fly = remember { Animatable(0f) } // 0 = in place, 1 = flown off the top
     var heightPx by remember { mutableFloatStateOf(0f) }
     val targeted = aim is AimState.Targeted
@@ -173,8 +189,13 @@ private fun VideoArea(viewModel: MainViewModel, hasVideo: Boolean, aim: AimState
             .onSizeChanged { heightPx = it.height.toFloat() }
             .then(if (targeted) Modifier.border(3.dp, Accent) else Modifier)
             .background(Color.Black)
-            .verticalSwipes(viewModel.swipes) { swipe ->
-                if (swipe != Swipe.UP || !hasVideo) return@verticalSwipes
+            .swipes(viewModel.swipes, horizontal = album?.isAlbum == true) { swipe ->
+                if (!hasVideo) return@swipes
+                if (swipe == Swipe.LEFT || swipe == Swipe.RIGHT) {
+                    scope.launch { viewModel.onSwipe(swipe) }
+                    return@swipes
+                }
+                if (swipe != Swipe.UP) return@swipes
                 scope.launch {
                     if (viewModel.aimState.value !is AimState.Targeted) {
                         viewModel.onSwipe(swipe) // explains what to do instead
@@ -190,23 +211,27 @@ private fun VideoArea(viewModel: MainViewModel, hasVideo: Boolean, aim: AimState
         contentAlignment = Alignment.Center,
     ) {
         if (hasVideo) {
-            AndroidView(
-                factory = { context -> PlayerView(context).apply { player = viewModel.player } },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        translationY = -fly.value * heightPx * 1.2f
-                        scaleX = 1f - 0.3f * fly.value
-                        scaleY = 1f - 0.3f * fly.value
-                    }
-                    .alpha(1f - fly.value),
-            )
+            val flying = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    translationY = -fly.value * heightPx * 1.2f
+                    scaleX = 1f - 0.3f * fly.value
+                    scaleY = 1f - 0.3f * fly.value
+                }
+                .alpha(1f - fly.value)
+            if (isPhoto) {
+                photo?.let { Image(it.asImageBitmap(), album?.current?.title, flying, contentScale = ContentScale.Fit) }
+                    ?: CircularProgressIndicator()
+            } else {
+                AndroidView(factory = { context -> PlayerView(context).apply { player = viewModel.player } }, modifier = flying)
+            }
             AimBanner(aim, Modifier.align(Alignment.TopCenter).padding(top = 10.dp))
+            if (album?.isAlbum == true) AlbumCounter(album, Modifier.align(Alignment.BottomEnd).padding(10.dp))
         } else {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Icon(Icons.Filled.VideoLibrary, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.height(12.dp))
-                Button(onClick = onPick, modifier = Modifier.testTag("pick")) { Text("Pick a video") }
+                Button(onClick = onPick, modifier = Modifier.testTag("pick")) { Text("Pick a video or photos") }
             }
         }
     }
@@ -262,8 +287,29 @@ private fun ScreensList(receivers: List<ReceiverItem>, busyWith: String?, canSen
 }
 
 @Composable
+private fun AlbumCounter(album: Album, modifier: Modifier = Modifier) {
+    Surface(modifier, shape = RoundedCornerShape(50), color = Color.Black.copy(alpha = 0.6f)) {
+        Text("${album.index + 1} / ${album.items.size}", Modifier.padding(horizontal = 10.dp, vertical = 4.dp), color = Color.White, style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+/** Under an empty "Screens nearby" list: the usual reasons, in plain words. */
+@Composable
+private fun NoScreensHelp() {
+    Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Not finding your screen?", style = MaterialTheme.typography.labelLarge)
+        listOf(
+            "Is SwipeTo running on the PC or TV? (Look for its icon in the tray.)",
+            "Are the phone and the screen on the same Wi-Fi? Guest networks often keep devices apart.",
+            "On a PC, allow SwipeTo on private networks in its Settings.",
+        ).forEach { Text("• $it", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall) }
+    }
+}
+
+@Composable
 private fun RemoteControl(
     state: LinkState.Remote,
+    album: Album?,
     onTogglePlay: () -> Unit,
     onSeek: (Long) -> Unit,
     onBringBack: () -> Unit,
@@ -276,14 +322,25 @@ private fun RemoteControl(
     Column(modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
             Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(Icons.Filled.Tv, null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.height(12.dp))
-                Text("Playing on ${state.receiverName}", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
-                Text(state.title, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (state.reconnecting) {
+                    Icon(Icons.Filled.SyncProblem, null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.error)
+                    Spacer(Modifier.height(12.dp))
+                    Text("Reconnecting to ${state.receiverName}…", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
+                    Text("It keeps playing there meanwhile.", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+                } else {
+                    Icon(Icons.Filled.Tv, null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.height(12.dp))
+                    val verb = if (state.kind == MediaKind.IMAGE) "Showing" else "Playing"
+                    Text("$verb on ${state.receiverName}", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
+                    Text(state.title, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (album?.isAlbum == true) Text("${album.index + 1} of ${album.items.size}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
         Spacer(Modifier.height(32.dp))
-        if (duration != null) {
+        if (state.kind == MediaKind.IMAGE) {
+            if (album?.isAlbum == true) Text("Swipe left or right for the next or previous one", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+        } else if (duration != null) {
             Slider(
                 value = if (dragging) dragValue else (state.positionMs.toFloat() / duration).coerceIn(0f, 1f),
                 onValueChange = {
@@ -304,8 +361,8 @@ private fun RemoteControl(
         } else {
             Text(formatTime(state.positionMs), style = MaterialTheme.typography.titleMedium)
         }
-        Spacer(Modifier.height(16.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        if (state.kind == MediaKind.VIDEO) Spacer(Modifier.height(16.dp))
+        if (state.kind == MediaKind.VIDEO) Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { onSeek(state.positionMs - 10_000) }) { Icon(Icons.Filled.Replay10, "Back 10 seconds", Modifier.size(32.dp)) }
             Spacer(Modifier.width(16.dp))
             FilledIconButton(onClick = onTogglePlay, modifier = Modifier.size(72.dp).testTag("play-pause")) {
@@ -352,6 +409,9 @@ private fun PairDialog(request: PairingRequest, onSubmit: (String) -> Unit, onCa
         dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
     )
 }
+
+/** At most this many items in one pick (an album). */
+private const val MAX_PICK = 50
 
 private fun formatTime(ms: Long): String {
     val total = (ms.coerceAtLeast(0) / 1000)

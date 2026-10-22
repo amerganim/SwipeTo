@@ -55,6 +55,13 @@ public sealed class HttpRangeStream : Stream
         return new HttpRangeStream(http, url, length, blockSize, first);
     }
 
+    /// <summary>
+    /// How long a block keeps being retried when the network fails (not when the server refuses):
+    /// a phone whose Wi-Fi blips comes back within this, and playback merely stalls meanwhile
+    /// instead of failing (seen on the A15).
+    /// </summary>
+    public TimeSpan RetryWindow { get; set; } = TimeSpan.FromSeconds(20);
+
     /// <summary>Starts fetching the block holding <paramref name="offset"/> (and the next) without waiting.</summary>
     public void Prefetch(long offset)
     {
@@ -174,12 +181,33 @@ public sealed class HttpRangeStream : Stream
 
     private async Task<byte[]> FetchAsync(long from, long to)
     {
-        Interlocked.Increment(ref _requests);
-        using var response = await GetRangeAsync(_http, _url, from, to, _disposed.Token);
-        var data = await response.Content.ReadAsByteArrayAsync(_disposed.Token);
-        Interlocked.Add(ref _bytesFetched, data.Length);
-        return data.Length == to - from + 1 ? data : throw new IOException($"Expected {to - from + 1} bytes at {from}, got {data.Length}");
+        var deadline = DateTime.UtcNow + RetryWindow;
+        while (true)
+        {
+            try
+            {
+                Interlocked.Increment(ref _requests);
+                using var response = await GetRangeAsync(_http, _url, from, to, _disposed.Token);
+                var data = await response.Content.ReadAsByteArrayAsync(_disposed.Token);
+                Interlocked.Add(ref _bytesFetched, data.Length);
+                return data.Length == to - from + 1 ? data : throw new IOException($"Expected {to - from + 1} bytes at {from}, got {data.Length}");
+            }
+            catch (Exception e) when (IsNetworkFailure(e) && !_disposed.IsCancellationRequested && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(RetryDelay, _disposed.Token);
+            }
+        }
     }
+
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>The network failed (worth retrying), as opposed to the server answering no (404 after the session ended).</summary>
+    private static bool IsNetworkFailure(Exception e) => e switch
+    {
+        HttpRequestException h => h.StatusCode is null,
+        IOException or TaskCanceledException => true,
+        _ => false,
+    };
 
     private static async Task<HttpResponseMessage> GetRangeAsync(HttpClient http, Uri url, long from, long to, CancellationToken ct)
     {
@@ -189,7 +217,7 @@ public sealed class HttpRangeStream : Stream
         if (response.StatusCode != HttpStatusCode.PartialContent && !(from == 0 && response.StatusCode == HttpStatusCode.OK))
         {
             response.Dispose();
-            throw new HttpRequestException($"Media server answered {(int)response.StatusCode} to a range request");
+            throw new HttpRequestException($"Media server answered {(int)response.StatusCode} to a range request", null, response.StatusCode);
         }
         return response;
     }

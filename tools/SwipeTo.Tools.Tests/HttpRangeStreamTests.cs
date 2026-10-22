@@ -72,6 +72,44 @@ public sealed class HttpRangeStreamTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_network_blip_while_reading_is_retried_not_fatal()
+    {
+        using var flaky = new HttpClient(new FailingHandler { InnerHandler = new HttpClientHandler() });
+        await using var stream = await HttpRangeStream.OpenAsync(flaky, _url, blockSize: 64 * 1024);
+        FailingHandler.FailNext = 3; // the phone's Wi-Fi is off for a moment
+        var buffer = new byte[1000];
+
+        stream.Position = 500_000;
+        var read = await stream.ReadAsync(buffer);
+
+        Assert.Equal(_data.AsSpan(500_000, read).ToArray(), buffer[..read]);
+        Assert.Equal(0, FailingHandler.FailNext);
+    }
+
+    [Fact]
+    public async Task A_refusing_server_is_not_retried()
+    {
+        await using var stream = await HttpRangeStream.OpenAsync(_http, _url, blockSize: 64 * 1024);
+        await _server.DisposeAsync(); // everything after this is refused or unreachable
+        stream.RetryWindow = TimeSpan.FromSeconds(1);
+        stream.Position = 500_000;
+
+        await Assert.ThrowsAnyAsync<Exception>(async () => await stream.ReadAsync(new byte[10]));
+    }
+
+    private sealed class FailingHandler : DelegatingHandler
+    {
+        public static int FailNext;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            if (FailNext <= 0) return base.SendAsync(request, ct);
+            FailNext--;
+            throw new HttpRequestException("Network is unreachable");
+        }
+    }
+
+    [Fact]
     public async Task Unknown_url_fails_to_open()
     {
         var bad = new Uri(_url, "/m/nope/nope");

@@ -75,6 +75,8 @@ public sealed class SenderClient : IAsyncDisposable
 
     public Task AimStartAsync(Prefetch? prefetch = null) => _channel.SendAsync(new AimStart(Prefetch: prefetch));
 
+    public Task PrepareAsync(MediaInfo media, long positionMs) => _channel.SendAsync(new Prepare(media, positionMs));
+
     /// <summary>Reports the marker nonce the camera read; the receiver says whether it locks.</summary>
     public Task<AimAck> LockAsync(string nonce) => RequestAsync<AimAck>(new AimStart(nonce));
 

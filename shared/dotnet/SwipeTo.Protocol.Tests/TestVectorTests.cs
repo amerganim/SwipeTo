@@ -36,7 +36,7 @@ public class TestVectorTests
         var valid = TestVectors.Valid().Select(r => ((string)r[0]).Split('-')[0]).ToHashSet();
         var invalid = TestVectors.Invalid().Select(r => ((string)r[0]).Split('-')[0]).ToHashSet();
 
-        Assert.Equal(17, types.Count);
+        Assert.Equal(18, types.Count);
         Assert.All(types, t => Assert.Contains(t, valid));
         Assert.All(types, t => Assert.Contains(t, invalid));
     }

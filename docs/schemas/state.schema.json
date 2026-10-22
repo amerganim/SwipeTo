@@ -21,6 +21,10 @@
     },
     "ended": {
       "type": "boolean"
+    },
+    "buffering": {
+      "type": "boolean",
+      "description": "True while the receiver is not yet showing frames (opening or waiting for data)."
     }
   },
   "required": [

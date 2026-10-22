@@ -62,12 +62,13 @@ object MessageCodec {
             MessageTypes.AIM_START -> AimStart(f.optionalMatching("nonce", MARKER_NONCE), parsePrefetch(f.optionalObj("prefetch")), id, ts, replyTo)
             MessageTypes.AIM_ACK -> AimAck(f.bool("locked"), id, ts, replyTo)
             MessageTypes.AIM_END -> AimEnd(id, ts, replyTo)
+            MessageTypes.PREPARE -> Prepare(parseMedia(f.obj("media")), f.integer("positionMs"), id, ts, replyTo)
             MessageTypes.HANDOFF -> Handoff(
                 parseMedia(f.obj("media")), f.integer("positionMs"), f.bool("playing"), f.optionalEnum<Transition>("transition"), id, ts, replyTo,
             )
             MessageTypes.HANDOFF_ACK -> HandoffAck(f.bool("accepted"), f.optionalEnum<ErrorCode>("reason"), id, ts, replyTo)
             MessageTypes.CONTROL -> Control(f.enum<ControlAction>("action"), f.optionalInteger("positionMs"), id, ts, replyTo)
-            MessageTypes.STATE -> PlaybackState(f.integer("positionMs"), f.bool("playing"), f.bool("ended"), id, ts, replyTo)
+            MessageTypes.STATE -> PlaybackState(f.integer("positionMs"), f.bool("playing"), f.bool("ended"), f.optionalBool("buffering") ?: false, id, ts, replyTo)
             MessageTypes.PULLBACK_REQUEST -> PullbackRequest(id, ts, replyTo)
             MessageTypes.PULLBACK -> Pullback(f.integer("positionMs"), f.bool("playing"), id, ts, replyTo)
             MessageTypes.PING -> Ping(id, ts, replyTo)
@@ -175,6 +176,7 @@ object MessageCodec {
                 put("positionMs", message.positionMs)
                 put("playing", message.playing)
                 put("ended", message.ended)
+                if (message.buffering) put("buffering", true)
             }
             is Pullback -> {
                 put("positionMs", message.positionMs)
@@ -194,6 +196,10 @@ object MessageCodec {
                 }
             }
             is AimAck -> put("locked", message.locked)
+            is Prepare -> {
+                putMedia(message.media)
+                put("positionMs", message.positionMs)
+            }
             is AimEnd, is PullbackRequest, is Ping, is Pong -> Unit
         }
     }
@@ -251,6 +257,8 @@ object MessageCodec {
         }
 
         fun optionalInteger(name: String): Long? = if (get(name) == null) null else integer(name)
+
+        fun optionalBool(name: String): Boolean? = if (get(name) == null) null else bool(name)
 
         fun bool(name: String): Boolean {
             val v = primitive(name)

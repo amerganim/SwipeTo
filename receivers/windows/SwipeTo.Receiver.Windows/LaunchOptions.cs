@@ -23,6 +23,9 @@ public sealed record LaunchOptions
     /// <summary>Put the QR marker card in the bottom-left corner instead of bottom-right (two receivers on one display).</summary>
     public bool MarkerLeft { get; init; }
 
+    /// <summary>Testing only: no mDNS advertisement, so phones on the Wi-Fi never list this receiver.</summary>
+    public bool NoAdvertise { get; init; }
+
     public string InstanceKey => DataDir is null ? "default" : Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(DataDir)))[..16];
 
     public static LaunchOptions Parse(string[] args)
@@ -39,6 +42,7 @@ public sealed record LaunchOptions
                 "--pair-code" => options with { PairingCode = Next() },
                 "--background" => options with { Background = true },
                 "--marker-corner" => options with { MarkerLeft = Next() == "left" },
+                "--no-advertise" => options with { NoAdvertise = true },
                 _ => options,
             };
         }

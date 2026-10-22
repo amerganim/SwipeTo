@@ -75,6 +75,7 @@ public partial class App : Application
                 Platform = "windows",
                 Port = _options.Port ?? ReceiverOptions.DefaultPort,
                 FixedPairingCode = _options.PairingCode,
+                Advertise = !_options.NoAdvertise,
             },
             playback,
             ui,

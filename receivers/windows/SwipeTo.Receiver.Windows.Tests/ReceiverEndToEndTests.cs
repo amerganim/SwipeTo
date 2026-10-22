@@ -52,6 +52,9 @@ public sealed partial class ReceiverEndToEndTests(ITestOutputHelper output) : IA
     [E2EFact]
     public async Task Pair_handoff_control_and_pullback_over_mdns()
     {
+        // The only test that needs discovery: swap in a receiver that advertises.
+        await _receiver.DisposeAsync();
+        _receiver = await ReceiverProcess.StartAsync(advertise: true);
         await using var sender = Sender(aimHold: TimeSpan.FromSeconds(2));
 
         Assert.True(await sender.RunScriptAsync());

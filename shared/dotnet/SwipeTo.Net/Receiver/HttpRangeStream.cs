@@ -17,6 +17,12 @@ public sealed class HttpRangeStream : Stream
     public const int DefaultBlockSize = 512 * 1024;
     private const int MaxCachedBlocks = 64; // 32 MiB at the default block size
 
+    /// <summary>
+    /// Blocks fetched ahead of the one being read. More in flight did not start playback sooner from a
+    /// Galaxy A15 (the player just buffered more first); its Wi-Fi delivers about 2.4 MB/s here.
+    /// </summary>
+    public const int ReadAheadBlocks = 1;
+
     private readonly HttpClient _http;
     private readonly Uri _url;
     private readonly int _blockSize;
@@ -87,7 +93,7 @@ public sealed class HttpRangeStream : Stream
         Interlocked.Exchange(ref _position, position + count);
 
         // Read ahead: players read sequentially most of the time.
-        if ((index + 1) * _blockSize < Length) _ = Block(index + 1);
+        ReadAhead(index);
         return count;
     }
 
@@ -126,6 +132,11 @@ public sealed class HttpRangeStream : Stream
             _disposed.Dispose();
         }
         base.Dispose(disposing);
+    }
+
+    private void ReadAhead(long index)
+    {
+        for (var next = index + 1; next <= index + ReadAheadBlocks && next * _blockSize < Length; next++) _ = Block(next);
     }
 
     private Task<byte[]> Block(long index)

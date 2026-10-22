@@ -39,12 +39,19 @@ public sealed partial class ReceiverProcess : IAsyncDisposable
     public string ReceiverId { get; }
     public Uri LocalUri => new($"ws://127.0.0.1:{Port}/v1");
 
-    public static async Task<ReceiverProcess> StartAsync()
+    /// <summary>
+    /// Launches the receiver. It advertises over mDNS only when <paramref name="advertise"/>, and then as
+    /// "SwipeTo test receiver": otherwise every phone on the Wi-Fi would list it while tests run.
+    /// </summary>
+    private static string[] Args(string dataDir, int port) =>
+        ["--data-dir", dataDir, "--port", port.ToString(), "--pair-code", PairingCode, "--name", "SwipeTo test receiver"];
+
+    public static async Task<ReceiverProcess> StartAsync(bool advertise = false)
     {
         var dataDir = Directory.CreateTempSubdirectory("swipeto-receiver-e2e-").FullName;
         var port = FreePort();
         var process = Process.Start(new ProcessStartInfo(FindExecutable(),
-            ["--data-dir", dataDir, "--port", port.ToString(), "--pair-code", PairingCode, "--name", "E2E screen"]))!;
+            [.. Args(dataDir, port), .. (advertise ? Array.Empty<string>() : ["--no-advertise"])]))!;
 
         var deadline = DateTime.UtcNow.AddSeconds(30);
         while (DateTime.UtcNow < deadline)

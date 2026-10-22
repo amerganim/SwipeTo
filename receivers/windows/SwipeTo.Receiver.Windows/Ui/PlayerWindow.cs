@@ -42,8 +42,9 @@ internal sealed class PlayerWindow : Window
         Visibility = Visibility.Collapsed,
     };
 
-    public PlayerWindow()
+    public PlayerWindow(string dataDir)
     {
+        YouTube = new YouTubeView(dataDir);
         Title = "SwipeTo";
         var close = new Button
         {
@@ -63,6 +64,7 @@ internal sealed class PlayerWindow : Window
 
         var root = new Grid { Background = new SolidColorBrush(Colors.Black) };
         root.Children.Add(_video);
+        root.Children.Add(YouTube.Element);
         root.Children.Add(_photo);
         root.Children.Add(_caption);
         root.Children.Add(new Border
@@ -108,10 +110,26 @@ internal sealed class PlayerWindow : Window
 
     public event Action? ViewerClosed;
 
+    /// <summary>YouTube's own player, for app content (docs/protocol.md, 5.4).</summary>
+    public YouTubeView YouTube { get; }
+
+    /// <summary>Full screen with YouTube's player (it loads the video itself, see <see cref="YouTube"/>).</summary>
+    public void ShowYouTube(string caption)
+    {
+        _video.SetMediaPlayer(null);
+        _video.Visibility = Visibility.Collapsed;
+        _photo.Visibility = Visibility.Collapsed;
+        _photo.Source = null;
+        _caption.Text = caption;
+        HideNotice();
+        ShowFullScreen();
+    }
+
     public bool IsShown => _appWindow.IsVisible;
 
     public void ShowVideo(MediaPlayer player, string caption)
     {
+        _ = YouTube.StopAsync();
         _photo.Visibility = Visibility.Collapsed;
         _photo.Source = null;
         _video.SetMediaPlayer(player);
@@ -127,6 +145,7 @@ internal sealed class PlayerWindow : Window
 
     public void ShowPhoto(Uri url, string caption, Transition? transition = null)
     {
+        _ = YouTube.StopAsync();
         _video.SetMediaPlayer(null);
         _video.Visibility = Visibility.Collapsed;
         _photo.Source = new BitmapImage(url);
@@ -173,6 +192,7 @@ internal sealed class PlayerWindow : Window
     /// <summary>Hides the window and lets go of the media it was showing.</summary>
     public void HideAndReset()
     {
+        _ = YouTube.StopAsync();
         _video.SetMediaPlayer(null);
         _photo.Source = null;
         _appWindow.Hide();

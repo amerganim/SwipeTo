@@ -1,4 +1,7 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Win32;
 
 namespace SwipeTo.Receiver.Windows.Services;
@@ -9,6 +12,29 @@ public sealed class ReceiverSettings
     public string ReceiverId { get; set; } = Guid.NewGuid().ToString("D");
     public string Name { get; set; } = Environment.MachineName;
     public bool FirstRunDone { get; set; }
+
+    /// <summary>The user's YouTube Data API key, encrypted for this Windows user (DPAPI); never stored in clear.</summary>
+    public string? YouTubeKeyProtected { get; set; }
+
+    [JsonIgnore]
+    public string? YouTubeKey
+    {
+        get
+        {
+            if (YouTubeKeyProtected is null) return null;
+            try
+            {
+                return Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(YouTubeKeyProtected), null, DataProtectionScope.CurrentUser));
+            }
+            catch (CryptographicException)
+            {
+                return null; // another user's or machine's settings file
+            }
+        }
+        set => YouTubeKeyProtected = string.IsNullOrWhiteSpace(value)
+            ? null
+            : Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(value.Trim()), null, DataProtectionScope.CurrentUser));
+    }
 
     public static ReceiverSettings Load(string dataDir)
     {

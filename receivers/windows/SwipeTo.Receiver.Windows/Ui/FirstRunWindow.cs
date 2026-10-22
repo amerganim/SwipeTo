@@ -15,7 +15,7 @@ internal sealed class FirstRunWindow : Window
     private readonly ITrustStore? _trust;
     private readonly StackPanel _phones = new() { Spacing = 6 };
 
-    public FirstRunWindow(string receiverName, Action<string> rename, ITrustStore? trust, bool firstRun)
+    public FirstRunWindow(string receiverName, Action<string> rename, ITrustStore? trust, bool firstRun, (bool Has, Action<string?> Set) youTubeKey)
     {
         _trust = trust;
         Title = firstRun ? "Welcome to SwipeTo" : "SwipeTo settings";
@@ -41,10 +41,26 @@ internal sealed class FirstRunWindow : Window
         var autostart = new CheckBox { Content = "Start SwipeTo when I sign in", IsChecked = StartWithWindows.IsEnabled };
         autostart.Click += (_, _) => StartWithWindows.Set(autostart.IsChecked == true);
 
+        // YouTube: the phone only knows the title and channel; the receiver finds the video with the
+        // official YouTube Data API, using the user's own key. Only title and channel go to Google.
+        var youTube = new PasswordBox
+        {
+            Header = "YouTube API key (to open YouTube videos swiped from the phone)",
+            PlaceholderText = youTubeKey.Has ? "Saved. Type a new key to replace it" : "Paste your YouTube Data API v3 key",
+        };
+        var youTubeHelp = new TextBlock
+        {
+            Text = "Create one at console.cloud.google.com: new project → enable \"YouTube Data API v3\" → Credentials → Create API key. " +
+                   "It is stored encrypted for your Windows account. SwipeTo sends YouTube only the title and channel of what you swiped.",
+            Opacity = 0.7,
+            TextWrapping = TextWrapping.Wrap,
+        };
+
         var done = new Button { Content = "Done", HorizontalAlignment = HorizontalAlignment.Right, Style = (Style)Application.Current.Resources["AccentButtonStyle"] };
         done.Click += (_, _) =>
         {
             if (!string.IsNullOrWhiteSpace(name.Text)) rename(name.Text.Trim());
+            if (!string.IsNullOrWhiteSpace(youTube.Password)) youTubeKey.Set(youTube.Password);
             Close();
         };
 
@@ -68,6 +84,8 @@ internal sealed class FirstRunWindow : Window
         panel.Children.Add(firewall);
         panel.Children.Add(firewallStatus);
         panel.Children.Add(autostart);
+        panel.Children.Add(youTube);
+        panel.Children.Add(youTubeHelp);
         if (trust is not null)
         {
             panel.Children.Add(new TextBlock { Text = "Trusted phones", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 8, 0, 0) });

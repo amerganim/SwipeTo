@@ -180,6 +180,23 @@ internal sealed class ReceiverConnection
         return Task.CompletedTask;
     }
 
+    /// <summary>Finds app content with its service; any failure is a refusal, never a guess.</summary>
+    private async Task<bool> ResolveAppAsync(MediaInfo media)
+    {
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            var found = await _host.Playback.ResolveAppAsync(media, timeout.Token);
+            _log.LogInformation("{Service} content \"{Title}\" {Outcome}", media.Service, media.Title, found ? "found" : "not found");
+            return found;
+        }
+        catch (Exception e)
+        {
+            _log.LogWarning("{Service} lookup failed: {Error}", media.Service, e.Message);
+            return false;
+        }
+    }
+
     private void StopPreparing()
     {
         _prepared?.Cancel();
@@ -221,7 +238,13 @@ internal sealed class ReceiverConnection
         HideAim();
         if (!_host.Playback.CanPlay(handoff.Media))
         {
-            await _channel.SendAsync(new HandoffAck(false, ErrorCode.UnsupportedMedia) { ReplyTo = handoff.Id });
+            var reason = handoff.Media.IsApp ? ErrorCode.ServiceUnavailable : ErrorCode.UnsupportedMedia;
+            await _channel.SendAsync(new HandoffAck(false, reason) { ReplyTo = handoff.Id });
+            return;
+        }
+        if (handoff.Media.IsApp && _host.Playback.CurrentUrl != handoff.Media.Key && !await ResolveAppAsync(handoff.Media))
+        {
+            await _channel.SendAsync(new HandoffAck(false, ErrorCode.ServiceUnavailable) { ReplyTo = handoff.Id });
             return;
         }
         if (!_host.TryClaim(this))
@@ -236,7 +259,7 @@ internal sealed class ReceiverConnection
 
         var playback = _host.Playback;
         var now = playback.Snapshot;
-        if (playback.CurrentUrl == handoff.Media.Url && !now.Ended)
+        if (playback.CurrentUrl == handoff.Media.Key && !now.Ended)
         {
             // Same media again (a phone that reconnected): carry on from where the viewer is, no reload,
             // no seek; the phone's position is only its estimate (docs/protocol.md, 5.4).

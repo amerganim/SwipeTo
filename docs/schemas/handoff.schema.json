@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://swipeto.dev/schemas/v1/handoff.schema.json",
   "title": "handoff",
-  "description": "Phone hands media to the receiver at a position.",
+  "description": "Phone hands media (a file it serves, or another app's content) to the receiver at a position.",
   "type": "object",
   "allOf": [
     {
@@ -14,7 +14,7 @@
       "const": "handoff"
     },
     "media": {
-      "$ref": "common.schema.json#/$defs/media"
+      "$ref": "common.schema.json#/$defs/anyMedia"
     },
     "positionMs": {
       "$ref": "common.schema.json#/$defs/positionMs"

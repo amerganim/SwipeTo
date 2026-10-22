@@ -1,6 +1,7 @@
 package dev.swipeto.sender.aim
 
 import dev.swipeto.protocol.Prepare
+import dev.swipeto.sender.net.SenderConnection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -23,11 +24,15 @@ class Preparer(
     private val target: () -> LinkTarget?,
     /** What is playing and where, published for [LinkTarget]; null while nothing worth preparing plays. */
     private val what: suspend (LinkTarget) -> Prepare?,
+    /** Repeat this often while nothing changes. */
     private val intervalMs: Long = INTERVAL_MS,
+    /** Look this often for a new link or new media, which is prepared at once. */
+    private val pollMs: Long = POLL_MS,
+    private val clock: () -> Long = System::currentTimeMillis,
     private val log: (String) -> Unit = {},
 ) {
     private var job: Job? = null
-    private var preparing: Pair<String, String>? = null // screen id to media url, for the log
+    private var preparing: Triple<SenderConnection, String, Long>? = null // link, media url, sent at
 
     /** Running (whether or not anything plays right now). */
     val active: Boolean get() = job?.isActive == true
@@ -37,7 +42,7 @@ class Preparer(
         job = scope.launch {
             while (isActive) {
                 tick()
-                delay(intervalMs)
+                delay(pollMs)
             }
         }
     }
@@ -52,14 +57,17 @@ class Preparer(
         val screen = target() ?: return
         val conn = links.ready(screen.id) ?: return
         val prepare = runCatching { what(screen) }.getOrNull() ?: return
+        val last = preparing
+        val same = last != null && last.first === conn && last.second == prepare.media.url
+        if (same && clock() - last!!.third < intervalMs) return
         if (runCatching { conn.send(prepare) }.isFailure) return
-        val now = screen.id to prepare.media.url
-        if (now != preparing) log("preparing ${prepare.media.title} on ${screen.name} at ${prepare.positionMs} ms")
-        preparing = now
+        if (!same) log("preparing ${prepare.media.title} on ${screen.name} at ${prepare.positionMs} ms")
+        preparing = Triple(conn, prepare.media.url, clock())
     }
 
     companion object {
         /** A screen drops what it prepared 10 s after the last `prepare`. */
         const val INTERVAL_MS = 4_000L
+        const val POLL_MS = 1_000L
     }
 }

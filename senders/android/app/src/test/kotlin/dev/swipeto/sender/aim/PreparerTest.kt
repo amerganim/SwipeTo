@@ -53,6 +53,7 @@ class PreparerTest {
         scope, links, { target },
         what = { if (playing) Prepare(clip, position) else null },
         intervalMs = 150,
+        pollMs = 50,
     )
 
     private fun prepares() = desk.received.filterIsInstance<Prepare>()

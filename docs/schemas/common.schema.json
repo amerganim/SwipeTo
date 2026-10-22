@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://swipeto.dev/schemas/v1/common.schema.json",
+  "title": "Shared definitions",
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "positionMs": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "deviceName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "trustToken": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{22,128}$"
+    },
+    "errorCode": {
+      "enum": [
+        "unsupported_media",
+        "not_paired",
+        "bad_message",
+        "busy",
+        "version_mismatch"
+      ]
+    },
+    "envelope": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "pattern": "^[a-z][a-z_]*$"
+        },
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "replyTo": {
+          "$ref": "#/$defs/uuid"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "ts"
+      ]
+    }
+  }
+}

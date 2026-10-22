@@ -1,0 +1,226 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://swipeto.dev/schemas/v1/message.schema.json",
+  "title": "Any SwipeTo v1 message",
+  "description": "Dispatches on `type` to the matching message schema.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "enum": [
+        "pair_request",
+        "pair_confirm",
+        "pair_result",
+        "hello",
+        "hello_ack",
+        "aim_start",
+        "aim_end",
+        "handoff",
+        "handoff_ack",
+        "control",
+        "state",
+        "pullback_request",
+        "pullback",
+        "ping",
+        "pong",
+        "error"
+      ]
+    }
+  },
+  "required": [
+    "type"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "pair_request"
+          }
+        }
+      },
+      "then": {
+        "$ref": "pair_request.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "pair_confirm"
+          }
+        }
+      },
+      "then": {
+        "$ref": "pair_confirm.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "pair_result"
+          }
+        }
+      },
+      "then": {
+        "$ref": "pair_result.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "hello"
+          }
+        }
+      },
+      "then": {
+        "$ref": "hello.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "hello_ack"
+          }
+        }
+      },
+      "then": {
+        "$ref": "hello_ack.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "aim_start"
+          }
+        }
+      },
+      "then": {
+        "$ref": "aim_start.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "aim_end"
+          }
+        }
+      },
+      "then": {
+        "$ref": "aim_end.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "handoff"
+          }
+        }
+      },
+      "then": {
+        "$ref": "handoff.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "handoff_ack"
+          }
+        }
+      },
+      "then": {
+        "$ref": "handoff_ack.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "control"
+          }
+        }
+      },
+      "then": {
+        "$ref": "control.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "state"
+          }
+        }
+      },
+      "then": {
+        "$ref": "state.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "pullback_request"
+          }
+        }
+      },
+      "then": {
+        "$ref": "pullback_request.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "pullback"
+          }
+        }
+      },
+      "then": {
+        "$ref": "pullback.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "ping"
+          }
+        }
+      },
+      "then": {
+        "$ref": "ping.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "pong"
+          }
+        }
+      },
+      "then": {
+        "$ref": "pong.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "error"
+          }
+        }
+      },
+      "then": {
+        "$ref": "error.schema.json"
+      }
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://swipeto.dev/schemas/v1/hello_ack.schema.json",
+  "title": "hello_ack",
+  "description": "Receiver accepts or refuses the session.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/envelope"
+    }
+  ],
+  "properties": {
+    "type": {
+      "const": "hello_ack"
+    },
+    "receiverId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "accepted": {
+      "type": "boolean"
+    },
+    "reason": {
+      "$ref": "common.schema.json#/$defs/errorCode"
+    }
+  },
+  "required": [
+    "type",
+    "receiverId",
+    "accepted"
+  ],
+  "unevaluatedProperties": false,
+  "if": {
+    "properties": {
+      "accepted": {
+        "const": false
+      }
+    }
+  },
+  "then": {
+    "required": [
+      "reason"
+    ]
+  }
+}

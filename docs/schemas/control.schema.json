@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://swipeto.dev/schemas/v1/control.schema.json",
+  "title": "control",
+  "description": "Phone remote-controls playback on the receiver. seek requires positionMs.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/envelope"
+    }
+  ],
+  "properties": {
+    "type": {
+      "const": "control"
+    },
+    "action": {
+      "enum": [
+        "play",
+        "pause",
+        "seek",
+        "stop"
+      ]
+    },
+    "positionMs": {
+      "$ref": "common.schema.json#/$defs/positionMs"
+    }
+  },
+  "required": [
+    "type",
+    "action"
+  ],
+  "unevaluatedProperties": false,
+  "if": {
+    "properties": {
+      "action": {
+        "const": "seek"
+      }
+    }
+  },
+  "then": {
+    "required": [
+      "positionMs"
+    ]
+  }
+}

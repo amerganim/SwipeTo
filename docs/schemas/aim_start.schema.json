@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://swipeto.dev/schemas/v1/aim_start.schema.json",
+  "title": "aim_start",
+  "description": "Phone is raised toward this receiver. Receiver shows edge glow and marker.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/envelope"
+    }
+  ],
+  "properties": {
+    "type": {
+      "const": "aim_start"
+    }
+  },
+  "required": [
+    "type"
+  ],
+  "unevaluatedProperties": false
+}

@@ -23,6 +23,8 @@ internal sealed class ReceiverConnection
     private bool _aimLocked;
     private CancellationTokenSource? _stateTicker;
 
+    private const long SameMediaSeekToleranceMs = 1_500;
+
     public ReceiverConnection(ReceiverHost host, WebSocket socket, ILogger log)
     {
         _host = host;
@@ -138,13 +140,21 @@ internal sealed class ReceiverConnection
             await _channel.SendAsync(new AimAck(locked) { ReplyTo = aim.Id });
         }
 
+        if (aim.Prefetch is { } prefetch && _host.Playback.CanPlay(prefetch.Media))
+        {
+            // Start loading what is about to be handed off (no-op if this URL is already prefetched).
+            _host.Playback.Prefetch(prefetch.Media, prefetch.PositionMs);
+        }
+
         _host.Ui.ShowAim(_host.Markers.Payload(_options.ReceiverId), _aimLocked);
         StartMarkerRotation();
         _aimTimeout?.Cancel();
         var timeout = _aimTimeout = new CancellationTokenSource();
         _ = Task.Delay(_options.AimTimeout, timeout.Token).ContinueWith(t =>
         {
-            if (!t.IsCanceled) HideAim();
+            if (t.IsCanceled) return;
+            HideAim();
+            _host.Playback.DiscardPrefetch();
         }, TaskScheduler.Default);
     }
 
@@ -167,6 +177,7 @@ internal sealed class ReceiverConnection
     private Task OnAimEndAsync()
     {
         HideAim();
+        _host.Playback.DiscardPrefetch();
         return Task.CompletedTask;
     }
 
@@ -187,11 +198,26 @@ internal sealed class ReceiverConnection
         StopStateTicker();
         _host.Playback.Changed -= OnPlaybackChanged;
         await _channel.SendAsync(new HandoffAck(true) { ReplyTo = handoff.Id });
-        _log.LogInformation("Handoff of {Kind} at {Position} ms", handoff.Media.Kind, handoff.PositionMs);
+
+        var playback = _host.Playback;
+        var now = playback.Snapshot;
+        if (playback.CurrentUrl == handoff.Media.Url && !now.Ended)
+        {
+            // Same media again (a phone that reconnected): carry on, don't reload (docs/protocol.md, 5.4).
+            if (Math.Abs(now.PositionMs - handoff.PositionMs) > SameMediaSeekToleranceMs) playback.Seek(handoff.PositionMs);
+            if (handoff.Playing) playback.Play(); else playback.Pause();
+            _log.LogInformation("Re-attached to {Kind} already playing at {Position} ms", handoff.Media.Kind, now.PositionMs);
+            playback.Changed += OnPlaybackChanged;
+            await SendStateAsync();
+            StartStateTicker();
+            return;
+        }
+        _log.LogInformation("Handoff of {Kind} at {Position} ms{Transition}", handoff.Media.Kind, handoff.PositionMs,
+            handoff.Transition is { } t ? $" ({t.ToString().ToLowerInvariant()})" : "");
 
         try
         {
-            await _host.Playback.LoadAsync(handoff.Media, handoff.PositionMs, handoff.Playing, CancellationToken.None);
+            await _host.Playback.LoadAsync(handoff.Media, handoff.PositionMs, handoff.Playing, handoff.Transition, CancellationToken.None);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
@@ -304,7 +330,11 @@ internal sealed class ReceiverConnection
         // The viewer keeps watching if the phone drops; we just stop reporting to it.
         DetachPlayback();
         if (_pairingCode is not null) EndPairing();
-        if (_aimTimeout is not null) HideAim();
+        if (_aimTimeout is not null)
+        {
+            HideAim();
+            _host.Playback.DiscardPrefetch();
+        }
         if (_senderName is not null) _host.OnSenderDisconnected(_senderName);
     }
 }

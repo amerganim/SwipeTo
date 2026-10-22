@@ -72,11 +72,17 @@ public sealed record HelloAck(string ReceiverId, bool Accepted, ErrorCode? Reaso
     public override string Type => MessageTypes.HelloAck;
 }
 
-/// <summary>With <see cref="Nonce"/>: the marker nonce the phone's camera read, asking the receiver to confirm the lock.</summary>
-public sealed record AimStart(string? Nonce = null) : Message
+/// <summary>
+/// With <see cref="Nonce"/>: the marker nonce the phone's camera read, asking the receiver to confirm the lock.
+/// With <see cref="Prefetch"/>: what is about to be handed off, so the receiver can start loading it.
+/// </summary>
+public sealed record AimStart(string? Nonce = null, Prefetch? Prefetch = null) : Message
 {
     public override string Type => MessageTypes.AimStart;
 }
+
+/// <summary>A hint to open <see cref="Media"/> at <see cref="PositionMs"/> before the <c>handoff</c> arrives.</summary>
+public sealed record Prefetch(MediaInfo Media, long PositionMs);
 
 /// <summary>Answer to an <c>aim_start</c> with a nonce: locked if it is the receiver's current or previous marker nonce.</summary>
 public sealed record AimAck(bool Locked) : Message
@@ -91,7 +97,8 @@ public sealed record AimEnd : Message
 
 public sealed record MediaInfo(MediaKind Kind, string Url, string Mime, string Title, long? DurationMs = null);
 
-public sealed record Handoff(MediaInfo Media, long PositionMs, bool Playing) : Message
+/// <summary><see cref="Transition"/>: the media follows on from what is showing (album navigation).</summary>
+public sealed record Handoff(MediaInfo Media, long PositionMs, bool Playing, Transition? Transition = null) : Message
 {
     public override string Type => MessageTypes.Handoff;
 }

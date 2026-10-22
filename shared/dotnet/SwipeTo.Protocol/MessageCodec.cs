@@ -62,10 +62,10 @@ public static partial class MessageCodec
             MessageTypes.Hello => new Hello(
                 f.Uuid("senderId"), f.DeviceName("senderName"), f.Matching("trustToken", TrustTokenPattern()), ParseVersion(f)),
             MessageTypes.HelloAck => new HelloAck(f.Uuid("receiverId"), f.Bool("accepted"), f.OptionalEnum<ErrorCode>("reason")),
-            MessageTypes.AimStart => new AimStart(f.OptionalMatching("nonce", MarkerNoncePattern())),
+            MessageTypes.AimStart => new AimStart(f.OptionalMatching("nonce", MarkerNoncePattern()), ParsePrefetch(f.OptionalObject("prefetch"))),
             MessageTypes.AimAck => new AimAck(f.Bool("locked")),
             MessageTypes.AimEnd => new AimEnd(),
-            MessageTypes.Handoff => new Handoff(ParseMedia(f.Object("media")), f.Integer("positionMs"), f.Bool("playing")),
+            MessageTypes.Handoff => new Handoff(ParseMedia(f.Object("media")), f.Integer("positionMs"), f.Bool("playing"), f.OptionalEnum<Transition>("transition")),
             MessageTypes.HandoffAck => new HandoffAck(f.Bool("accepted"), f.OptionalEnum<ErrorCode>("reason")),
             MessageTypes.Control => new Control(f.Enum<ControlAction>("action"), f.OptionalInteger("positionMs")),
             MessageTypes.State => new PlaybackState(f.Integer("positionMs"), f.Bool("playing"), f.Bool("ended")),
@@ -109,6 +109,14 @@ public static partial class MessageCodec
             (true, _, _) => throw Bad("pair_result: ok=true needs trustToken and no reason"),
             _ => throw Bad("pair_result: ok=false needs reason and no trustToken"),
         };
+    }
+
+    private static Prefetch? ParsePrefetch(Fields? p)
+    {
+        if (p is null) return null;
+        var prefetch = new Prefetch(ParseMedia(p.Object("media")), p.Integer("positionMs"));
+        p.RejectUnknown();
+        return prefetch;
     }
 
     private static MediaInfo ParseMedia(Fields m)
@@ -167,15 +175,10 @@ public static partial class MessageCodec
                 if (m.Reason is { } helloReason) w.WriteString("reason", WireEnum.ToWire(helloReason));
                 break;
             case Handoff m:
-                w.WriteStartObject("media");
-                w.WriteString("kind", WireEnum.ToWire(m.Media.Kind));
-                w.WriteString("url", m.Media.Url);
-                w.WriteString("mime", m.Media.Mime);
-                w.WriteString("title", m.Media.Title);
-                if (m.Media.DurationMs is { } duration) w.WriteNumber("durationMs", duration);
-                w.WriteEndObject();
+                WriteMedia(w, m.Media);
                 w.WriteNumber("positionMs", m.PositionMs);
                 w.WriteBoolean("playing", m.Playing);
+                if (m.Transition is { } transition) w.WriteString("transition", WireEnum.ToWire(transition));
                 break;
             case HandoffAck m:
                 w.WriteBoolean("accepted", m.Accepted);
@@ -200,6 +203,13 @@ public static partial class MessageCodec
                 break;
             case AimStart m:
                 if (m.Nonce is not null) w.WriteString("nonce", m.Nonce);
+                if (m.Prefetch is { } prefetch)
+                {
+                    w.WriteStartObject("prefetch");
+                    WriteMedia(w, prefetch.Media);
+                    w.WriteNumber("positionMs", prefetch.PositionMs);
+                    w.WriteEndObject();
+                }
                 break;
             case AimAck m:
                 w.WriteBoolean("locked", m.Locked);
@@ -209,6 +219,17 @@ public static partial class MessageCodec
             default:
                 throw new ArgumentException($"Unknown message record {message.GetType().Name}", nameof(message));
         }
+    }
+
+    private static void WriteMedia(Utf8JsonWriter w, MediaInfo media)
+    {
+        w.WriteStartObject("media");
+        w.WriteString("kind", WireEnum.ToWire(media.Kind));
+        w.WriteString("url", media.Url);
+        w.WriteString("mime", media.Mime);
+        w.WriteString("title", media.Title);
+        if (media.DurationMs is { } duration) w.WriteNumber("durationMs", duration);
+        w.WriteEndObject();
     }
 
     internal static ProtocolException Bad(string reason) => new(ErrorCode.BadMessage, reason);
@@ -293,6 +314,8 @@ public static partial class MessageCodec
             WireEnum.TryParse<T>(String(name), out var value) ? value : throw Bad($"{where}: '{name}' has an unknown value");
 
         public T? OptionalEnum<T>(string name) where T : struct, Enum => Get(name) is null ? null : Enum<T>(name);
+
+        public Fields? OptionalObject(string name) => Get(name) is null ? null : Object(name);
 
         public Fields Object(string name)
         {

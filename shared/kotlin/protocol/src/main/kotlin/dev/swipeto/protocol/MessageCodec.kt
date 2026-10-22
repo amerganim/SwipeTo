@@ -59,10 +59,12 @@ object MessageCodec {
             MessageTypes.HELLO_ACK -> HelloAck(
                 f.matching("receiverId", UUID), f.bool("accepted"), f.optionalEnum<ErrorCode>("reason"), id, ts, replyTo,
             )
-            MessageTypes.AIM_START -> AimStart(f.optionalMatching("nonce", MARKER_NONCE), id, ts, replyTo)
+            MessageTypes.AIM_START -> AimStart(f.optionalMatching("nonce", MARKER_NONCE), parsePrefetch(f.optionalObj("prefetch")), id, ts, replyTo)
             MessageTypes.AIM_ACK -> AimAck(f.bool("locked"), id, ts, replyTo)
             MessageTypes.AIM_END -> AimEnd(id, ts, replyTo)
-            MessageTypes.HANDOFF -> Handoff(parseMedia(f.obj("media")), f.integer("positionMs"), f.bool("playing"), id, ts, replyTo)
+            MessageTypes.HANDOFF -> Handoff(
+                parseMedia(f.obj("media")), f.integer("positionMs"), f.bool("playing"), f.optionalEnum<Transition>("transition"), id, ts, replyTo,
+            )
             MessageTypes.HANDOFF_ACK -> HandoffAck(f.bool("accepted"), f.optionalEnum<ErrorCode>("reason"), id, ts, replyTo)
             MessageTypes.CONTROL -> Control(f.enum<ControlAction>("action"), f.optionalInteger("positionMs"), id, ts, replyTo)
             MessageTypes.STATE -> PlaybackState(f.integer("positionMs"), f.bool("playing"), f.bool("ended"), id, ts, replyTo)
@@ -103,6 +105,13 @@ object MessageCodec {
             ok -> throw bad("pair_result: ok=true needs trustToken and no reason")
             else -> throw bad("pair_result: ok=false needs reason and no trustToken")
         }
+    }
+
+    private fun parsePrefetch(p: Fields?): Prefetch? {
+        if (p == null) return null
+        val prefetch = Prefetch(parseMedia(p.obj("media")), p.integer("positionMs"))
+        p.rejectUnknown()
+        return prefetch
     }
 
     private fun parseMedia(m: Fields): MediaInfo {
@@ -149,15 +158,10 @@ object MessageCodec {
                 message.reason?.let { put("reason", it.wire) }
             }
             is Handoff -> {
-                putJsonObject("media") {
-                    put("kind", message.media.kind.wire)
-                    put("url", message.media.url)
-                    put("mime", message.media.mime)
-                    put("title", message.media.title)
-                    message.media.durationMs?.let { put("durationMs", it) }
-                }
+                putMedia(message.media)
                 put("positionMs", message.positionMs)
                 put("playing", message.playing)
+                message.transition?.let { put("transition", it.wire) }
             }
             is HandoffAck -> {
                 put("accepted", message.accepted)
@@ -180,10 +184,26 @@ object MessageCodec {
                 put("code", message.code.wire)
                 put("message", message.description)
             }
-            is AimStart -> message.nonce?.let { put("nonce", it) }
+            is AimStart -> {
+                message.nonce?.let { put("nonce", it) }
+                message.prefetch?.let { prefetch ->
+                    putJsonObject("prefetch") {
+                        putMedia(prefetch.media)
+                        put("positionMs", prefetch.positionMs)
+                    }
+                }
+            }
             is AimAck -> put("locked", message.locked)
             is AimEnd, is PullbackRequest, is Ping, is Pong -> Unit
         }
+    }
+
+    private fun JsonObjectBuilder.putMedia(media: MediaInfo) = putJsonObject("media") {
+        put("kind", media.kind.wire)
+        put("url", media.url)
+        put("mime", media.mime)
+        put("title", media.title)
+        media.durationMs?.let { put("durationMs", it) }
     }
 
     internal fun bad(reason: String) = ProtocolException(ErrorCode.BAD_MESSAGE, reason)
@@ -247,6 +267,8 @@ object MessageCodec {
 
         inline fun <reified T> optionalEnum(name: String): T? where T : Enum<T>, T : WireEnum =
             if (get(name) == null) null else enum<T>(name)
+
+        fun optionalObj(name: String): Fields? = if (get(name) == null) null else obj(name)
 
         fun obj(name: String): Fields {
             val v = required(name)

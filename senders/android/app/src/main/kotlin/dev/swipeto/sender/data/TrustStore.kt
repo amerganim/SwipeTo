@@ -37,8 +37,14 @@ class TrustStore(context: Context) : TrustTokens {
 
     fun isPaired(receiverId: String) = get(receiverId) != null
 
+    /** When this phone last handed off to [receiverId]; the aim fallback prefers the most recent. */
+    fun lastUsed(receiverId: String): Long? = prefs.getLong(KEY_USED + receiverId, -1).takeIf { it >= 0 }
+
+    fun markUsed(receiverId: String) = prefs.edit().putLong(KEY_USED + receiverId, System.currentTimeMillis()).apply()
+
     private companion object {
         const val KEY_SENDER_ID = "sender_id"
         const val KEY_TOKEN = "token."
+        const val KEY_USED = "used."
     }
 }

@@ -1,8 +1,11 @@
 # SwipeTo sender for Android
 
-Phase 3: play a video on the phone, tap **Send** next to a screen, and it continues there at the same
-second. The phone becomes a remote; **Bring back to phone** resumes it locally where the screen was.
-(Raise-to-aim and swipe gestures come in Phase 4.)
+Play a video on the phone, **raise the phone toward a screen** (it glows), **swipe up** on the video,
+and the screen continues at the same second. The phone becomes a remote; **swipe down** (or *Bring
+back to phone*) resumes it locally where the screen was. The **Send** buttons still work for a
+quick handoff without gestures.
+
+Phase 4 (gestures and pointing) is described in [`AIM_TUNING.md`](AIM_TUNING.md).
 
 Kotlin, Jetpack Compose, Media3 ExoPlayer, NsdManager, OkHttp WebSocket, NanoHTTPD. Min SDK 26,
 target 36. The protocol models, codec and state machine come from `shared/kotlin/protocol`, built
@@ -18,6 +21,12 @@ from source as a Gradle composite build.
 | Phone id and per-receiver trust tokens | `data/TrustStore.kt` |
 | Player, discovery, Wi-Fi changes | `MainViewModel.kt` |
 | UI: player, screens list, pairing dialog, remote control | `ui/SwipeToScreen.kt` |
+| Raise-to-aim thresholds and presets (one file) | `aim/AimConfig.kt` |
+| Raise detection from camera elevation; swipe classification | `aim/RaiseToAimDetector.kt`, `aim/SwipeClassifier.kt`, `aim/OrientationSensor.kt` |
+| Target choice: camera QR marker (CameraX + ML Kit), else fallback | `aim/TargetResolver.kt`, `aim/CameraMarkerScanner.kt` |
+| Aim flow: `aim_start` to all paired screens, lock via `aim_ack`, `aim_end` to the rest | `aim/AimController.kt` |
+| Greeted connections kept ready while the player is in front | `aim/StandbyLinks.kt` |
+| Swipe gestures, fly-up, aim banner, settings sheet, sensor debug panel, haptics | `ui/AimUi.kt`, `ui/SwipeToScreen.kt` |
 
 ## Build
 

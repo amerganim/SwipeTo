@@ -72,7 +72,20 @@ import androidx.media3.ui.PlayerView
 import dev.swipeto.sender.MainViewModel
 import dev.swipeto.sender.PairingRequest
 import dev.swipeto.sender.ReceiverItem
+import dev.swipeto.sender.aim.AimState
+import dev.swipeto.sender.aim.Swipe
 import dev.swipeto.sender.handoff.LinkState
+import android.Manifest
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.border
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 
 @Composable
 fun SwipeToScreen(viewModel: MainViewModel) {
@@ -80,25 +93,48 @@ fun SwipeToScreen(viewModel: MainViewModel) {
     val link by viewModel.link.collectAsStateWithLifecycle()
     val receivers by viewModel.receivers.collectAsStateWithLifecycle()
     val pairing by viewModel.pairing.collectAsStateWithLifecycle()
+    val aim by viewModel.aimState.collectAsStateWithLifecycle()
+    val debugOn by viewModel.settings.debugOverlay.collectAsStateWithLifecycle()
+    val aimDebug by viewModel.aimDebug.collectAsStateWithLifecycle()
+    val needsCamera by viewModel.needsCameraPermission.collectAsStateWithLifecycle()
+    var showSettings by rememberSaveable { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
+    val view = LocalView.current
     LaunchedEffect(Unit) { viewModel.notices.collect { snackbar.showSnackbar(it) } }
+    LaunchedEffect(Unit) { viewModel.hints.collect { snackbar.showSnackbar(it) } }
+    LaunchedEffect(Unit) { viewModel.haptics.collect { view.play(it) } }
+
+    val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission(), viewModel::onCameraPermissionResult)
+    LaunchedEffect(needsCamera, video != null) {
+        // Ask once there is something to send; until then the camera would have nothing to do.
+        if (needsCamera && video != null) cameraPermission.launch(Manifest.permission.CAMERA)
+    }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) viewModel.onVideoPicked(uri)
     }
     val pickVideo = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) }
 
+    val scope = rememberCoroutineScope()
     Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("SwipeTo", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                IconButton(onClick = { showSettings = true }, modifier = Modifier.testTag("settings")) { Icon(Icons.Filled.Settings, "Settings") }
+            }
             when (val state = link) {
                 is LinkState.Remote -> RemoteControl(
                     state = state,
                     onTogglePlay = viewModel::togglePlay,
                     onSeek = viewModel::seekTo,
                     onBringBack = { viewModel.bringBack() },
+                    modifier = Modifier.verticalSwipes(viewModel.swipes) { swipe ->
+                        if (swipe == Swipe.DOWN) scope.launch { viewModel.onSwipe(swipe) }
+                    },
                 )
                 else -> {
-                    VideoArea(viewModel, hasVideo = video != null, onPick = pickVideo)
+                    VideoArea(viewModel, hasVideo = video != null, aim = aim, onPick = pickVideo)
+                    if (debugOn) DebugPanel(aimDebug, aim, viewModel::simulateAim)
                     video?.let {
                         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(it.title, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
@@ -117,16 +153,51 @@ fun SwipeToScreen(viewModel: MainViewModel) {
     }
 
     pairing?.let { PairDialog(it, onSubmit = viewModel::submitCode, onCancel = viewModel::cancelPairing) }
+    if (showSettings) SettingsSheet(viewModel.settings) { showSettings = false }
 }
 
 @Composable
-private fun VideoArea(viewModel: MainViewModel, hasVideo: Boolean, onPick: () -> Unit) {
-    Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color.Black), contentAlignment = Alignment.Center) {
+private fun VideoArea(viewModel: MainViewModel, hasVideo: Boolean, aim: AimState, onPick: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    val fly = remember { Animatable(0f) } // 0 = in place, 1 = flown off the top
+    var heightPx by remember { mutableFloatStateOf(0f) }
+    val targeted = aim is AimState.Targeted
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .aspectRatio(16f / 9f)
+            .onSizeChanged { heightPx = it.height.toFloat() }
+            .then(if (targeted) Modifier.border(3.dp, Accent) else Modifier)
+            .background(Color.Black)
+            .verticalSwipes(viewModel.swipes) { swipe ->
+                if (swipe != Swipe.UP || !hasVideo) return@verticalSwipes
+                scope.launch {
+                    if (viewModel.aimState.value !is AimState.Targeted) {
+                        viewModel.onSwipe(swipe) // explains what to do instead
+                        return@launch
+                    }
+                    // The video flies up towards the screen while the handoff runs; it drops back if it fails.
+                    val flight = launch { fly.animateTo(1f, tween(280)) }
+                    val sent = viewModel.onSwipe(swipe)
+                    flight.join()
+                    if (!sent) fly.animateTo(0f, tween(220))
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
         if (hasVideo) {
             AndroidView(
                 factory = { context -> PlayerView(context).apply { player = viewModel.player } },
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        translationY = -fly.value * heightPx * 1.2f
+                        scaleX = 1f - 0.3f * fly.value
+                        scaleY = 1f - 0.3f * fly.value
+                    }
+                    .alpha(1f - fly.value),
             )
+            AimBanner(aim, Modifier.align(Alignment.TopCenter).padding(top = 10.dp))
         } else {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Icon(Icons.Filled.VideoLibrary, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
@@ -187,12 +258,18 @@ private fun ScreensList(receivers: List<ReceiverItem>, busyWith: String?, canSen
 }
 
 @Composable
-private fun RemoteControl(state: LinkState.Remote, onTogglePlay: () -> Unit, onSeek: (Long) -> Unit, onBringBack: () -> Unit) {
+private fun RemoteControl(
+    state: LinkState.Remote,
+    onTogglePlay: () -> Unit,
+    onSeek: (Long) -> Unit,
+    onBringBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(0f) }
     val duration = state.durationMs?.takeIf { it > 0 }
 
-    Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+    Column(modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
             Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Icon(Icons.Filled.Tv, null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.primary)
@@ -239,6 +316,8 @@ private fun RemoteControl(state: LinkState.Remote, onTogglePlay: () -> Unit, onS
             Spacer(Modifier.width(8.dp))
             Text("Bring back to phone")
         }
+        Spacer(Modifier.height(12.dp))
+        SwipeDownHint()
     }
 }
 

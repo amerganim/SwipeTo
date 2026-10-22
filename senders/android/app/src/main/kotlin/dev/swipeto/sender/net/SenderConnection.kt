@@ -23,6 +23,7 @@ import dev.swipeto.protocol.Pullback
 import dev.swipeto.protocol.PullbackRequest
 import dev.swipeto.protocol.Role
 import dev.swipeto.protocol.SessionState
+import dev.swipeto.protocol.AimAck
 import dev.swipeto.protocol.AimEnd
 import dev.swipeto.protocol.AimStart
 import dev.swipeto.protocol.Control
@@ -107,6 +108,9 @@ class SenderConnection private constructor(
         request(Hello(identity.senderId, identity.senderName, trustToken, ProtocolVersion.CURRENT))
 
     fun aimStart() = send(AimStart())
+
+    /** Reports the marker nonce the camera read; the screen answers whether it locks. */
+    suspend fun lock(nonce: String): AimAck = request(AimStart(nonce))
 
     fun aimEnd() = send(AimEnd())
 

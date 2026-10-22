@@ -114,12 +114,18 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, YouTubeL
         MediaKind.Video => media.Mime.StartsWith("video/", StringComparison.Ordinal),
         MediaKind.Image => ImageTypes.Contains(media.Mime),
         // With its id YouTube needs nothing else; by title and channel it needs the user's API key.
-        MediaKind.App => media.Service == "youtube" && (media.ContentId is not null || youTube.HasKey),
+        MediaKind.App => media.Service switch
+        {
+            "youtube" => media.ContentId is not null || youTube.HasKey,
+            "web" => media.Url.StartsWith("https://", StringComparison.Ordinal),
+            _ => false,
+        },
         _ => false,
     };
 
     public async Task<bool> ResolveAppAsync(MediaInfo media, CancellationToken ct)
     {
+        if (media.Service == "web") return true;
         if (media.Service != "youtube") return false;
         var id = media.ContentId ?? await youTube.FindAsync(media.Title, media.Channel, ct);
         if (id is null) return false;
@@ -183,6 +189,12 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, YouTubeL
     public async Task LoadAsync(MediaInfo media, long positionMs, bool playing, Transition? transition, CancellationToken ct)
     {
         var clock = Stopwatch.StartNew();
+
+        if (media.Service == "web")
+        {
+            OpenInBrowser(media);
+            return;
+        }
 
         if (media.IsApp)
         {
@@ -347,6 +359,30 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, YouTubeL
             player.Play();
         }
         log.LogInformation("Video window up after {Shown} ms, media opened after {Opened} ms, at {Position} ms", shownMs, openedMs, positionMs);
+    }
+
+    /// <summary>
+    /// A web page (a video on any site): opened in the default browser, which plays it from the site
+    /// itself. No remote control is possible there, so playback here counts as over at once and the
+    /// phone is told it opened (docs/protocol.md, 5.4).
+    /// </summary>
+    private void OpenInBrowser(MediaInfo media)
+    {
+        DiscardPrefetch();
+        ui.TryEnqueue(() =>
+        {
+            ReleasePlayer();
+            if (_window?.IsShown == true) _window.HideAndReset();
+        });
+        Process.Start(new ProcessStartInfo(media.Url) { UseShellExecute = true });
+        lock (_gate)
+        {
+            _ended = true;
+            _wantPlaying = false;
+            _currentUrl = null;
+        }
+        log.LogInformation("Opened {Url} in the browser", media.Url);
+        RaiseChanged();
     }
 
     /// <summary>App content: YouTube's own player shows it; we only say which video, where and whether to play.</summary>

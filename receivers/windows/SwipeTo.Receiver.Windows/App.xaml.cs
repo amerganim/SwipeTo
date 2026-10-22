@@ -81,7 +81,7 @@ public partial class App : Application
                 Port = _options.Port ?? ReceiverOptions.DefaultPort,
                 FixedPairingCode = _options.PairingCode,
                 Advertise = !_options.NoAdvertise,
-                Services = "youtube",
+                Services = "youtube,web",
             },
             playback,
             ui,

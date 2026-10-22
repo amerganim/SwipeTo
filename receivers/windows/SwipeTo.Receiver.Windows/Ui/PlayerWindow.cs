@@ -4,7 +4,9 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Media.Imaging;
+using Transition = SwipeTo.Protocol.Transition;
 using Windows.Media.Playback;
 using Windows.System;
 
@@ -28,6 +30,16 @@ internal sealed class PlayerWindow : Window
         Margin = new Thickness(32, 24, 32, 24),
         HorizontalAlignment = HorizontalAlignment.Left,
         VerticalAlignment = VerticalAlignment.Top,
+    };
+    private readonly TextBlock _notice = new()
+    {
+        Foreground = new SolidColorBrush(Colors.White),
+        FontSize = 18,
+        Margin = new Thickness(32),
+        Padding = new Thickness(16, 10, 16, 10),
+        HorizontalAlignment = HorizontalAlignment.Center,
+        VerticalAlignment = VerticalAlignment.Bottom,
+        Visibility = Visibility.Collapsed,
     };
 
     public PlayerWindow()
@@ -53,6 +65,15 @@ internal sealed class PlayerWindow : Window
         root.Children.Add(_video);
         root.Children.Add(_photo);
         root.Children.Add(_caption);
+        root.Children.Add(new Border
+        {
+            Child = _notice,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(0, 0, 0, 48),
+            CornerRadius = new CornerRadius(12),
+            Background = new SolidColorBrush(global::Windows.UI.Color.FromArgb(0xB0, 0, 0, 0)),
+        });
         root.Children.Add(close);
 
         var escape = new KeyboardAccelerator { Key = VirtualKey.Escape };
@@ -97,21 +118,57 @@ internal sealed class PlayerWindow : Window
         _video.Visibility = Visibility.Visible;
         _video.Opacity = 0;
         _caption.Text = caption;
+        HideNotice();
         ShowFullScreen();
     }
 
     /// <summary>Shows the video once it is at the handed-off position (black until then).</summary>
     public void RevealVideo() => _video.Opacity = 1;
 
-    public void ShowPhoto(Uri url, string caption)
+    public void ShowPhoto(Uri url, string caption, Transition? transition = null)
     {
         _video.SetMediaPlayer(null);
         _video.Visibility = Visibility.Collapsed;
         _photo.Source = new BitmapImage(url);
         _photo.Visibility = Visibility.Visible;
         _caption.Text = caption;
-        ShowFullScreen();
+        HideNotice();
+        if (!IsShown) ShowFullScreen();
+        if (transition is { } t) SlideIn(t);
     }
+
+    /// <summary>Next photo comes in from the right, previous from the left.</summary>
+    private void SlideIn(Transition transition)
+    {
+        var from = (transition == Transition.Next ? 1 : -1) * Math.Max(400, _photo.ActualWidth) * 0.6;
+        var shift = new TranslateTransform { X = from };
+        _photo.RenderTransform = shift;
+        var slide = new DoubleAnimation
+        {
+            From = from,
+            To = 0,
+            Duration = new Duration(TimeSpan.FromMilliseconds(260)),
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+        };
+        var fade = new DoubleAnimation { From = 0.2, To = 1, Duration = new Duration(TimeSpan.FromMilliseconds(260)) };
+        var board = new Storyboard();
+        Storyboard.SetTarget(slide, shift);
+        Storyboard.SetTargetProperty(slide, "X");
+        Storyboard.SetTarget(fade, _photo);
+        Storyboard.SetTargetProperty(fade, "Opacity");
+        board.Children.Add(slide);
+        board.Children.Add(fade);
+        board.Begin();
+    }
+
+    /// <summary>A small line over the media, e.g. when the phone has gone away but playback continues.</summary>
+    public void ShowNotice(string text)
+    {
+        _notice.Text = text;
+        _notice.Visibility = Visibility.Visible;
+    }
+
+    public void HideNotice() => _notice.Visibility = Visibility.Collapsed;
 
     /// <summary>Hides the window and lets go of the media it was showing.</summary>
     public void HideAndReset()

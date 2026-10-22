@@ -24,6 +24,8 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
     private PlayerWindow? _window;
     private MediaPlayer? _player;
     private HttpRangeStream? _stream;
+    private string? _currentUrl;
+    private PrefetchedVideo? _prefetch;
     private bool _wantPlaying;
     private bool _ended = true;
     private long _lastPositionMs;
@@ -72,35 +74,108 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
         _ => false,
     };
 
-    public async Task LoadAsync(MediaInfo media, long positionMs, bool playing, CancellationToken ct)
+    public string? CurrentUrl
+    {
+        get { lock (_gate) return _ended ? null : _currentUrl; }
+    }
+
+    /// <summary>
+    /// Opens a video during the aim, paused and unseen (docs/protocol.md, 5.3), so the handoff that
+    /// follows the swipe adopts an already-open player. Photos load fast enough not to need it.
+    /// </summary>
+    public void Prefetch(MediaInfo media, long positionMs)
+    {
+        if (media.Kind != MediaKind.Video) return;
+        lock (_gate)
+        {
+            if (_prefetch?.Url == media.Url)
+            {
+                // Same video, the phone has played on: keep the prefetch near where it now is.
+                if (Math.Abs(_prefetch.PositionMs - positionMs) > 1_500 && _prefetch.Ready.IsCompletedSuccessfully)
+                {
+                    _prefetch.Ready.Result.Player.PlaybackSession.Position = TimeSpan.FromMilliseconds(positionMs);
+                    _prefetch.PositionMs = positionMs;
+                }
+                return;
+            }
+            Release(_prefetch);
+            var cancel = new CancellationTokenSource();
+            _prefetch = new PrefetchedVideo(media.Url, OpenVideoAsync(media, positionMs, cancel.Token), cancel) { PositionMs = positionMs };
+        }
+        log.LogInformation("Prefetching video at {Position} ms", positionMs);
+    }
+
+    public void DiscardPrefetch()
+    {
+        PrefetchedVideo? old;
+        lock (_gate)
+        {
+            old = _prefetch;
+            _prefetch = null;
+        }
+        if (old is null) return;
+        Release(old);
+        log.LogInformation("Prefetch discarded");
+    }
+
+    public async Task LoadAsync(MediaInfo media, long positionMs, bool playing, Transition? transition, CancellationToken ct)
     {
         var clock = Stopwatch.StartNew();
 
         if (media.Kind == MediaKind.Image)
         {
+            DiscardPrefetch();
             await ui.RunAsync(() =>
             {
                 ReleasePlayer();
-                EnsureWindow().ShowPhoto(new Uri(media.Url), media.Title);
+                EnsureWindow().ShowPhoto(new Uri(media.Url), media.Title, transition);
                 lock (_gate)
                 {
                     _ended = false;
                     _wantPlaying = false;
                     _lastPositionMs = positionMs;
+                    _currentUrl = media.Url;
                 }
             });
-            log.LogInformation("Photo shown after {Ms} ms", clock.ElapsedMilliseconds);
+            log.LogInformation("Photo shown after {Ms} ms{Transition}", clock.ElapsedMilliseconds, transition is { } t ? $" ({t})" : "");
             return;
         }
 
-        // Feed the player a range-reading stream rather than the URL: the built-in HTTP source buffers
-        // about two seconds before it starts, this starts as soon as the first frames have arrived.
-        var stream = await HttpRangeStream.OpenAsync(Http, new Uri(media.Url), ct: ct);
-        var player = new MediaPlayer { AutoPlay = false, AudioCategory = MediaPlayerAudioCategory.Movie };
-        var opened = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        player.MediaOpened += (_, _) => opened.TrySetResult();
-        player.MediaFailed += (_, e) => opened.TrySetException(new InvalidOperationException($"{e.Error}: {e.ErrorMessage}"));
-        player.Source = MediaSource.CreateFromStream(stream.AsRandomAccessStream(), media.Mime);
+        // Adopt the player opened during the aim, if it is this video and it opened.
+        (MediaPlayer Player, HttpRangeStream Stream)? ready = null;
+        if (TakePrefetch(media.Url) is { } pre)
+        {
+            try
+            {
+                ready = await pre.Ready.WaitAsync(OpenTimeout, ct);
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                log.LogWarning("Prefetched video unusable, opening again: {Error}", e.Message);
+            }
+        }
+        var prefetched = ready is not null;
+
+        HttpRangeStream stream;
+        MediaPlayer player;
+        Task opened;
+        if (ready is { } r)
+        {
+            (player, stream) = r;
+            opened = Task.CompletedTask;
+        }
+        else
+        {
+            // Feed the player a range-reading stream rather than the URL: the built-in HTTP source buffers
+            // about two seconds before it starts, this starts as soon as the first frames have arrived.
+            stream = await HttpRangeStream.OpenAsync(Http, new Uri(media.Url), ct: ct);
+            player = new MediaPlayer { AutoPlay = false, AudioCategory = MediaPlayerAudioCategory.Movie };
+            var openedSource = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            player.MediaOpened += (_, _) => openedSource.TrySetResult();
+            player.MediaFailed += (_, e) => openedSource.TrySetException(new InvalidOperationException($"{e.Error}: {e.ErrorMessage}"));
+            player.Source = MediaSource.CreateFromStream(stream.AsRandomAccessStream(), media.Mime);
+            opened = openedSource.Task;
+        }
 
         // Go full screen (black) while the media opens, rather than one after the other.
         await ui.RunAsync(() =>
@@ -112,7 +187,7 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
 
         try
         {
-            await opened.Task.WaitAsync(OpenTimeout, ct);
+            await opened.WaitAsync(OpenTimeout, ct);
         }
         catch
         {
@@ -132,6 +207,7 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
             _ended = false;
             _wantPlaying = playing;
             _lastPositionMs = positionMs;
+            _currentUrl = media.Url;
         }
         // The video stays hidden until the first seek lands (or it plays), so frame 0 never flashes up.
         var revealed = 0;
@@ -144,8 +220,8 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
             if (s.PlaybackState == MediaPlaybackState.Playing && clock.IsRunning)
             {
                 clock.Stop();
-                log.LogInformation("First frame playing {Ms} ms after handoff at {Position} ms ({KiB} KiB in {Requests} range requests)",
-                    clock.ElapsedMilliseconds, (long)s.Position.TotalMilliseconds, stream.BytesFetched / 1024, stream.Requests);
+                log.LogInformation("First frame playing {Ms} ms after handoff at {Position} ms, {How} ({KiB} KiB in {Requests} range requests)",
+                    clock.ElapsedMilliseconds, (long)s.Position.TotalMilliseconds, prefetched ? "PREFETCHED" : "cold", stream.BytesFetched / 1024, stream.Requests);
             }
             if (!IsCurrent(player)) return;
             if (s.PlaybackState == MediaPlaybackState.Playing) Reveal();
@@ -211,6 +287,13 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
 
     public void Stop() => ui.TryEnqueue(() => EndPlayback("by the phone"));
 
+    public void ShowNotice(string text) => ui.TryEnqueue(() =>
+    {
+        if (_window?.IsShown == true) _window.ShowNotice(text);
+    });
+
+    public void HideNotice() => ui.TryEnqueue(() => _window?.HideNotice());
+
     public PlaybackSnapshot Snapshot
     {
         get
@@ -260,6 +343,60 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
         }
         log.LogInformation("Player closed {By} at {Position} ms", by, _lastPositionMs);
         RaiseChanged();
+    }
+
+    private PrefetchedVideo? TakePrefetch(string url)
+    {
+        PrefetchedVideo? taken;
+        lock (_gate)
+        {
+            taken = _prefetch;
+            _prefetch = null;
+        }
+        if (taken is null || taken.Url == url) return taken;
+        Release(taken);
+        return null;
+    }
+
+    /// <summary>Opens a video paused at a position, without showing it.</summary>
+    private static async Task<(MediaPlayer Player, HttpRangeStream Stream)> OpenVideoAsync(MediaInfo media, long positionMs, CancellationToken ct)
+    {
+        var stream = await HttpRangeStream.OpenAsync(Http, new Uri(media.Url), ct: ct);
+        var player = new MediaPlayer { AutoPlay = false, AudioCategory = MediaPlayerAudioCategory.Movie };
+        var opened = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        player.MediaOpened += (_, _) => opened.TrySetResult();
+        player.MediaFailed += (_, e) => opened.TrySetException(new InvalidOperationException($"{e.Error}: {e.ErrorMessage}"));
+        player.Source = MediaSource.CreateFromStream(stream.AsRandomAccessStream(), media.Mime);
+        try
+        {
+            await opened.Task.WaitAsync(OpenTimeout, ct);
+        }
+        catch
+        {
+            player.Dispose();
+            await stream.DisposeAsync();
+            throw;
+        }
+        // Seeking now makes the pipeline read and decode around the position before the swipe.
+        player.PlaybackSession.Position = TimeSpan.FromMilliseconds(positionMs);
+        return (player, stream);
+    }
+
+    private static void Release(PrefetchedVideo? prefetch)
+    {
+        if (prefetch is null) return;
+        prefetch.Cancel.Cancel();
+        prefetch.Ready.ContinueWith(t =>
+        {
+            if (!t.IsCompletedSuccessfully) return;
+            t.Result.Player.Dispose();
+            t.Result.Stream.Dispose();
+        }, TaskScheduler.Default);
+    }
+
+    private sealed record PrefetchedVideo(string Url, Task<(MediaPlayer Player, HttpRangeStream Stream)> Ready, CancellationTokenSource Cancel)
+    {
+        public long PositionMs { get; set; }
     }
 
     private void ReleasePlayer()

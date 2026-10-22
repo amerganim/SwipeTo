@@ -35,7 +35,7 @@ public sealed partial class ReceiverEndToEndTests(ITestOutputHelper output) : IA
         File.Delete(_senderState);
     }
 
-    private MockSenderApp Sender(string? receiver = null, TimeSpan? aimHold = null) => new(new MockSenderOptions
+    private MockSenderApp Sender(string? receiver = null, TimeSpan? aimHold = null, TimeSpan? prefetch = null) => new(new MockSenderOptions
     {
         Receiver = receiver ?? _receiver.ReceiverId,
         Code = ReceiverProcess.PairingCode,
@@ -44,6 +44,7 @@ public sealed partial class ReceiverEndToEndTests(ITestOutputHelper output) : IA
         PositionMs = HandoffAtMs,
         StateFile = _senderState,
         AimHold = aimHold ?? TimeSpan.Zero,
+        PrefetchLead = prefetch ?? TimeSpan.Zero,
         StepDelay = TimeSpan.FromMilliseconds(1500), // let playback actually start before each control step
         DiscoveryTimeout = TimeSpan.FromSeconds(15),
     }, new TestWriter(output));
@@ -95,6 +96,31 @@ public sealed partial class ReceiverEndToEndTests(ITestOutputHelper output) : IA
         Assert.False((await ended).Playing);
         await _receiver.WaitForLogAsync(new Regex("Player closed by the viewer"));
     }
+
+    [E2EFact]
+    public async Task Prefetch_on_aim_starts_faster_than_a_cold_handoff()
+    {
+        // Same machine and clock for both sides; over Wi-Fi the gap is larger (see the PR's A15 numbers).
+        await using (var cold = Sender(_receiver.LocalUri.ToString()))
+        {
+            Assert.True(await cold.RunScriptAsync());
+        }
+        await using (var warm = Sender(_receiver.LocalUri.ToString(), prefetch: TimeSpan.FromMilliseconds(1500)))
+        {
+            Assert.True(await warm.RunScriptAsync());
+        }
+
+        var lines = FirstFrameDetailed().Matches(_receiver.Log);
+        var coldMs = lines.Where(m => m.Groups["how"].Value == "cold").Select(m => long.Parse(m.Groups["ms"].Value, CultureInfo.InvariantCulture)).First();
+        var warmMs = lines.Where(m => m.Groups["how"].Value == "PREFETCHED").Select(m => long.Parse(m.Groups["ms"].Value, CultureInfo.InvariantCulture)).First();
+        output.WriteLine($"Handoff to first frame: cold {coldMs} ms, prefetched {warmMs} ms");
+
+        Assert.True(warmMs < 500, $"prefetched start {warmMs} ms");
+        Assert.True(warmMs <= coldMs, $"prefetched {warmMs} ms vs cold {coldMs} ms");
+    }
+
+    [GeneratedRegex(@"First frame playing (?<ms>\d+) ms after handoff at \d+ ms, (?<how>cold|PREFETCHED)")]
+    private static partial Regex FirstFrameDetailed();
 
     [GeneratedRegex("Aim glow and marker shown")]
     private static partial Regex AimShown();

@@ -7,6 +7,7 @@ public enum ErrorCode
     BadMessage,
     Busy,
     VersionMismatch,
+    ServiceUnavailable,
 }
 
 public enum PairFailure
@@ -21,6 +22,9 @@ public enum MediaKind
 {
     Video,
     Image,
+
+    /// <summary>Another app's content (YouTube...): no file; see <see cref="MediaInfo.App"/>.</summary>
+    App,
 }
 
 public enum Transition

@@ -65,8 +65,8 @@ public static partial class MessageCodec
             MessageTypes.AimStart => new AimStart(f.OptionalMatching("nonce", MarkerNoncePattern()), ParsePrefetch(f.OptionalObject("prefetch"))),
             MessageTypes.AimAck => new AimAck(f.Bool("locked")),
             MessageTypes.AimEnd => new AimEnd(),
-            MessageTypes.Prepare => new Prepare(ParseMedia(f.Object("media")), f.Integer("positionMs")),
-            MessageTypes.Handoff => new Handoff(ParseMedia(f.Object("media")), f.Integer("positionMs"), f.Bool("playing"), f.OptionalEnum<Transition>("transition")),
+            MessageTypes.Prepare => new Prepare(ParseMedia(f.Object("media"), allowApp: false), f.Integer("positionMs")),
+            MessageTypes.Handoff => new Handoff(ParseMedia(f.Object("media"), allowApp: true), f.Integer("positionMs"), f.Bool("playing"), f.OptionalEnum<Transition>("transition")),
             MessageTypes.HandoffAck => new HandoffAck(f.Bool("accepted"), f.OptionalEnum<ErrorCode>("reason")),
             MessageTypes.Control => new Control(f.Enum<ControlAction>("action"), f.OptionalInteger("positionMs")),
             MessageTypes.State => new PlaybackState(f.Integer("positionMs"), f.Bool("playing"), f.Bool("ended"), f.OptionalBool("buffering") ?? false),
@@ -115,13 +115,26 @@ public static partial class MessageCodec
     private static Prefetch? ParsePrefetch(Fields? p)
     {
         if (p is null) return null;
-        var prefetch = new Prefetch(ParseMedia(p.Object("media")), p.Integer("positionMs"));
+        var prefetch = new Prefetch(ParseMedia(p.Object("media"), allowApp: false), p.Integer("positionMs"));
         p.RejectUnknown();
         return prefetch;
     }
 
-    private static MediaInfo ParseMedia(Fields m)
+    private static MediaInfo ParseMedia(Fields m, bool allowApp)
     {
+        if (m.Enum<MediaKind>("kind") == MediaKind.App)
+        {
+            if (!allowApp) throw Bad("media: only a handoff can carry app content");
+            var app = MediaInfo.App(
+                m.Matching("service", ServicePattern()),
+                m.Text("title", 0, 200),
+                m.OptionalText("channel", 200),
+                m.OptionalMatching("contentId", ContentIdPattern()),
+                m.OptionalMatching("contentUrl", HttpsUrlPattern(), maxLength: 2048),
+                m.OptionalInteger("durationMs"));
+            m.RejectUnknown();
+            return app;
+        }
         var media = new MediaInfo(
             m.Enum<MediaKind>("kind"),
             m.Matching("url", UrlPattern(), maxLength: 2048),
@@ -231,6 +244,17 @@ public static partial class MessageCodec
     {
         w.WriteStartObject("media");
         w.WriteString("kind", WireEnum.ToWire(media.Kind));
+        if (media.IsApp)
+        {
+            w.WriteString("service", media.Service);
+            w.WriteString("title", media.Title);
+            if (media.Channel is not null) w.WriteString("channel", media.Channel);
+            if (media.ContentId is not null) w.WriteString("contentId", media.ContentId);
+            if (media.Url.Length > 0) w.WriteString("contentUrl", media.Url);
+            if (media.DurationMs is { } appDuration) w.WriteNumber("durationMs", appDuration);
+            w.WriteEndObject();
+            return;
+        }
         w.WriteString("url", media.Url);
         w.WriteString("mime", media.Mime);
         w.WriteString("title", media.Title);
@@ -254,6 +278,15 @@ public static partial class MessageCodec
 
     [GeneratedRegex(@"^https?://[^\s]+$")]
     internal static partial Regex UrlPattern();
+
+    [GeneratedRegex("^[a-z0-9-]{1,32}$")]
+    private static partial Regex ServicePattern();
+
+    [GeneratedRegex("^[A-Za-z0-9_-]{1,128}$")]
+    private static partial Regex ContentIdPattern();
+
+    [GeneratedRegex(@"^https://[^\s]+$")]
+    private static partial Regex HttpsUrlPattern();
 
     [GeneratedRegex("^(video|image)/[A-Za-z0-9.+-]+$")]
     internal static partial Regex MimePattern();
@@ -294,7 +327,10 @@ public static partial class MessageCodec
             return s.Length <= maxLength && pattern.IsMatch(s) ? s : throw Bad($"{where}: '{name}' has an invalid format");
         }
 
-        public string? OptionalMatching(string name, Regex pattern) => Get(name) is null ? null : Matching(name, pattern);
+        public string? OptionalMatching(string name, Regex pattern, int maxLength = int.MaxValue) =>
+            Get(name) is null ? null : Matching(name, pattern, maxLength);
+
+        public string? OptionalText(string name, int maxLength) => Get(name) is null ? null : Text(name, 0, maxLength);
 
         public string Uuid(string name) => Matching(name, UuidPattern());
 

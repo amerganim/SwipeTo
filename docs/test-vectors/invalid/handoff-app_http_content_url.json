@@ -1,0 +1,14 @@
+{
+  "type": "handoff",
+  "id": "3f2b8c1e-9a4d-4e6f-8b2a-1c3d5e7f9a0b",
+  "ts": 1761091200000,
+  "media": {
+    "kind": "app",
+    "service": "youtube",
+    "title": "Big Buck Bunny 60fps 4K - Official Blender Foundation Short Film",
+    "channel": "Blender",
+    "contentUrl": "http://youtube.com/watch?v=aqz-KE-bpKQ"
+  },
+  "positionMs": 0,
+  "playing": true
+}

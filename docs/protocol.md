@@ -35,6 +35,7 @@ TXT record keys:
 | `platform` | `windows` \| `tizen` \| `androidtv` \| `macos` | `windows` |
 | `ver` | Highest protocol version spoken, decimal | `1` |
 | `caps` | Comma-separated capabilities | `video,image` |
+| `svcs` | Optional. Services whose content the receiver can open (`kind: "app"`, section 5.4) | `youtube` |
 | `port` | WebSocket port, decimal (same as SRV port) | `48620` |
 
 Senders MUST identify receivers by `id`, never by name or IP address: the IP
@@ -312,6 +313,28 @@ The sender's media `url` has the form
 - MUST require `sessionToken` (≥ 128 bits, base64url) and answer `404` for any
   unknown token or file id — without revealing which part was wrong;
 - MUST stop serving when the session ends.
+
+**App content.** Media from another app's service (YouTube...) is never
+streamed by the phone: SwipeTo hands off *which content and where*, and the
+receiver opens it with that service's own official player. `media` is then:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `kind` | `app` | yes | |
+| `service` | `[a-z0-9-]{1,32}` | yes | e.g. `youtube`; one the receiver lists in `svcs` |
+| `title` | string ≤ 200 | yes | As the phone's app shows it |
+| `channel` | string ≤ 200 | no | Channel or artist, to find the content by title |
+| `contentId` | `[A-Za-z0-9_-]{1,128}` | no | The service's own id (YouTube video id), when the phone knows it |
+| `contentUrl` | `https://` URL ≤ 2048 | no | A link to the content, when the phone knows it |
+| `durationMs` | integer ≥ 0 | no | |
+
+`url` and `mime` are absent: there is no file. With neither `contentId` nor
+`contentUrl` the receiver identifies the content from `title` and `channel`
+(for YouTube: its search API, accepting only an exact title match on that
+channel) and MUST refuse rather than guess: `handoff_ack {accepted: false,
+reason: "service_unavailable"}` when it cannot open the service or find exactly
+that content. `positionMs`, `playing`, `control`, `state` and `pullback` work as
+for a video. `prepare` and `prefetch` carry files only.
 
 Optional `transition` ∈ `next`, `previous`: the media follows on from what the
 receiver is showing, in that direction (a photo album, see below). Receivers

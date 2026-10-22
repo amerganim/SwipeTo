@@ -14,6 +14,7 @@ enum class ErrorCode(override val wire: String) : WireEnum {
     BAD_MESSAGE("bad_message"),
     BUSY("busy"),
     VERSION_MISMATCH("version_mismatch"),
+    SERVICE_UNAVAILABLE("service_unavailable"),
 }
 
 enum class PairFailure(override val wire: String) : WireEnum {
@@ -26,6 +27,9 @@ enum class PairFailure(override val wire: String) : WireEnum {
 enum class MediaKind(override val wire: String) : WireEnum {
     VIDEO("video"),
     IMAGE("image"),
+
+    /** Another app's content (YouTube...): no file; see [MediaInfo.app]. */
+    APP("app"),
 }
 
 enum class Transition(override val wire: String) : WireEnum {

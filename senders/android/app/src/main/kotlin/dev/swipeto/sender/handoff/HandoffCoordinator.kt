@@ -66,13 +66,18 @@ sealed interface LinkState {
         val kind: MediaKind = MediaKind.VIDEO,
         /** The connection dropped; the screen carries on while the phone tries to get back to it. */
         val reconnecting: Boolean = false,
+        /** Handed off, but the screen shows no frames yet: the phone keeps playing meanwhile. */
+        val starting: Boolean = false,
     ) : LinkState
 }
 
 /**
  * Handoff: connect, pair if needed, hello, publish the file, hand off at the phone's current
- * position, pause locally, then act as a remote until bring-back. Album photos are paged on the
- * screen with [show].
+ * position, then act as a remote until bring-back. Album photos are paged on the screen with [show].
+ *
+ * A playing video keeps playing on the phone until the screen reports frames showing (`state`
+ * without `buffering`, docs/protocol.md 5.4), so nobody sees or hears a gap; only then does the
+ * phone pause.
  *
  * If the connection drops while the screen has the media, the screen keeps playing and the phone
  * reconnects for up to [reconnectWindowMs], handing off the same URL at its estimated position (the
@@ -93,6 +98,7 @@ class HandoffCoordinator(
     private val stateTimeoutMs: Long = 6_000,
     private val reconnectWindowMs: Long = 20_000,
     private val reconnectRetryMs: Long = 1_000,
+    private val overlapMaxMs: Long = 8_000,
     private val log: (String) -> Unit = {},
 ) {
     private val _state = MutableStateFlow<LinkState>(LinkState.Idle)
@@ -141,13 +147,19 @@ class HandoffCoordinator(
             val ack = conn.handoff(info, position, playing)
             if (!ack.accepted) return fail(refusal(target.name, ack.reason), conn)
 
-            local.pause()
+            val overlap = playing && media.kind == MediaKind.VIDEO
+            if (!overlap) local.pause()
             lastStateAt = clock()
             log("handed off to ${target.name} at $position ms, playing=$playing")
             this.target = target
             handedOff = info
-            _state.value = LinkState.Remote(target.name, media.title, position, playing, media.durationMs, media.kind)
+            _state.value = LinkState.Remote(target.name, media.title, position, playing, media.durationMs, media.kind, starting = overlap)
             watch(conn, target.name)
+            if (overlap) scope.launch {
+                // A screen that never says it shows frames (an older one, or stuck): stop overlapping anyway.
+                delay(overlapMaxMs)
+                if ((_state.value as? LinkState.Remote)?.starting == true) shown("no frames reported after $overlapMaxMs ms")
+            }
             return true
         } catch (e: ReceiverException) {
             return fail(e.code?.let { refusal(target.name, it) } ?: "Lost ${target.name}: ${e.message}", conn)
@@ -328,6 +340,11 @@ class HandoffCoordinator(
                 }
             }
             launch {
+                // The latest state, not the event stream: the first one can arrive before we listen.
+                val first = conn.lastState.first { it != null && it.playing && !it.buffering && !it.ended }!!
+                shown("screen shows frames at ${first.positionMs} ms")
+            }
+            launch {
                 conn.closed.first { it }
                 log("connection to $receiverName closed")
                 onLinkLost(conn, "connection closed")
@@ -353,6 +370,15 @@ class HandoffCoordinator(
         } else {
             _state.value = remote.copy(positionMs = state.positionMs, playing = state.playing)
         }
+    }
+
+    /** The screen took over the picture: the phone stops playing. */
+    private fun shown(why: String) {
+        val remote = _state.value as? LinkState.Remote ?: return
+        if (!remote.starting) return
+        local.pause()
+        _state.value = remote.copy(starting = false)
+        log("phone paused: $why")
     }
 
     private fun estimatedPosition(remote: LinkState.Remote): Long {

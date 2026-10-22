@@ -40,6 +40,8 @@ class FakeReceiver(
     private val receiverId: String = "0e1d2c3b-4a59-4687-9a8b-7c6d5e4f3a21",
     var busy: Boolean = false,
     var answerPings: Boolean = true,
+    /** Report `buffering` after a handoff until [showFrames]; like a real screen loading over Wi-Fi. */
+    var bufferFirst: Boolean = false,
     /** The marker nonce this screen is "showing"; aim_start with it locks. */
     var markerNonce: String = "Qm9vVGhlU2NyZWVuTm9uY2U",
 ) : AutoCloseable {
@@ -72,6 +74,9 @@ class FakeReceiver(
     }
 
     fun push(message: Message) = send(message)
+
+    /** The first frames are up: `state` without `buffering`. */
+    fun showFrames() = send(PlaybackState(positionMs, playing, false))
 
     /** The viewer closed playback on the screen. */
     fun endPlayback() = send(PlaybackState(positionMs, playing = false, ended = true))
@@ -152,7 +157,7 @@ class FakeReceiver(
                         positionMs = message.positionMs
                         playing = message.playing
                         reply(HandoffAck(true, replyTo = message.id))
-                        reply(PlaybackState(positionMs, playing, false))
+                        reply(PlaybackState(positionMs, playing, false, buffering = bufferFirst && playing))
                     }
                 }
                 is Control -> {

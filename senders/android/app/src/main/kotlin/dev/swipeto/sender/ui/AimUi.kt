@@ -130,6 +130,7 @@ fun SettingsSheet(settings: AppSettings, bottomInset: Dp, onDismiss: () -> Unit)
     val raise by settings.raiseToAim.collectAsStateWithLifecycle()
     val camera by settings.cameraTargeting.collectAsStateWithLifecycle()
     val debug by settings.debugOverlay.collectAsStateWithLifecycle()
+    val prepare by settings.prepareScreen.collectAsStateWithLifecycle()
     // Fully expanded: a half-open sheet would clip the last settings behind the navigation bar.
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         // The app draws edge to edge and the sheet reports no insets of its own, so the caller passes the
@@ -140,6 +141,12 @@ fun SettingsSheet(settings: AppSettings, bottomInset: Dp, onDismiss: () -> Unit)
         ) {
             Text("Settings", style = MaterialTheme.typography.titleLarge)
             SettingSwitch("Raise to aim", "Lift the phone toward a screen, then swipe up to send.", raise, settings::setRaiseToAim)
+            SettingSwitch(
+                "Instant start",
+                "While a video plays, the screen you used last loads it quietly, so a swipe starts it at once. Uses that screen's Wi-Fi.",
+                prepare,
+                settings::setPrepareScreen,
+            )
             Column {
                 Text("Sensitivity", style = MaterialTheme.typography.titleSmall)
                 Text("How easily raising and swiping trigger.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)

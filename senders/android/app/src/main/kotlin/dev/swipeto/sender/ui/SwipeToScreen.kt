@@ -330,8 +330,12 @@ private fun RemoteControl(
                 } else {
                     Icon(Icons.Filled.Tv, null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.height(12.dp))
-                    val verb = if (state.kind == MediaKind.IMAGE) "Showing" else "Playing"
-                    Text("$verb on ${state.receiverName}", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
+                    val verb = when {
+                        state.starting -> "Starting on"
+                        state.kind == MediaKind.IMAGE -> "Showing on"
+                        else -> "Playing on"
+                    }
+                    Text("$verb ${state.receiverName}", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
                     Text(state.title, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     if (album?.isAlbum == true) Text("${album.index + 1} of ${album.items.size}", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }

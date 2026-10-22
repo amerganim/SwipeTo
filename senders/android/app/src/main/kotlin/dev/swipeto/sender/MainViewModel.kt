@@ -19,6 +19,8 @@ import androidx.media3.exoplayer.ExoPlayer
 import dev.swipeto.protocol.MediaInfo
 import dev.swipeto.protocol.MediaKind
 import dev.swipeto.protocol.Prefetch
+import dev.swipeto.protocol.Prepare
+import dev.swipeto.sender.aim.Preparer
 import dev.swipeto.protocol.Transition
 import dev.swipeto.sender.aim.AimConfig
 import dev.swipeto.sender.aim.AimController
@@ -214,12 +216,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (targeted.verified) learnBearing(targeted.target.id, fromCamera = true)
         },
         prefetch = { target -> prefetchFor(target) },
-        // A prefetch published the file for that screen; without a handoff it must stop being served.
-        onEnded = { if (link.value is LinkState.Idle) publisher.endSession() },
+        // A prefetch published the file for that screen; without a handoff it must stop being served
+        // (unless it is being prepared there, which keeps the same URL).
+        onEnded = { if (link.value is LinkState.Idle && !preparer.active) publisher.endSession() },
         log = { EventLog.i(it) },
     )
 
     val aimState: StateFlow<AimState> = aim.state
+
+    private val preparer = Preparer(
+        scope = viewModelScope,
+        links = links,
+        target = ::screenToPrepare,
+        what = { target ->
+            prefetchFor(target)?.takeIf { player.isPlaying && settings.prepareScreen.value && onUnmeteredWifi() }
+                ?.let { Prepare(it.media, it.positionMs) }
+        },
+        log = { EventLog.i(it) },
+    )
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         private var current: Network? = null
@@ -272,6 +286,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     stopAiming()
                 }
+                updatePreparing()
             }
         }
     }
@@ -287,6 +302,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             viewModelScope.launch { links.closeAll() }
         }
         updateAiming()
+        updatePreparing()
     }
 
     fun onCameraPermissionResult(granted: Boolean) {
@@ -553,6 +569,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         return SenderConnection.connect(url, trust.identity, client, log = { EventLog.i(it) })
     }
 
+    /** Preparing runs while the app is in front and the phone has the media; each tick checks the rest. */
+    private fun updatePreparing() {
+        if (foreground && link.value is LinkState.Idle) {
+            preparer.start()
+        } else {
+            val wasPreparing = preparer.active
+            preparer.stop()
+            // Gone to the background: what was published for preparing stops being served.
+            if (wasPreparing && link.value is LinkState.Idle) publisher.endSession()
+        }
+    }
+
+    /** The screen used most recently, if it is paired and on this Wi-Fi now. */
+    private fun screenToPrepare(): LinkTarget? = pairedTargets()
+        .mapNotNull { t -> trust.lastUsed(t.id)?.let { t to it } }
+        .maxByOrNull { it.second }?.first
+
+    private fun onUnmeteredWifi(): Boolean {
+        val network = wifi ?: return false
+        return connectivity.getNetworkCapabilities(network)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == true
+    }
+
     private fun onLocalNetwork(): Boolean {
         val caps = connectivity.getNetworkCapabilities(connectivity.activeNetwork) ?: return false
         return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
@@ -596,6 +634,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
+        preparer.stop()
         stopAiming()
         coordinator.takeBackNow()
         connectivity.unregisterNetworkCallback(networkCallback)

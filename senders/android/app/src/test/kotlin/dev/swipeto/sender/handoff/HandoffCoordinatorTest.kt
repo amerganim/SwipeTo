@@ -57,8 +57,38 @@ class HandoffCoordinatorTest {
     }
 
     @Test
+    fun `the phone keeps playing until the screen shows frames`() = runBlocking {
+        receiver.bufferFirst = true
+        assertTrue(coordinator.sendTo(target, media))
+
+        awaitRemote { it.starting }
+        delay(300)
+        assertTrue(local.isPlaying) // the screen is still buffering: no gap on the phone
+
+        receiver.showFrames()
+
+        awaitRemote { !it.starting }
+        assertFalse(local.isPlaying)
+    }
+
+    @Test
+    fun `a screen that never reports frames still takes over after the overlap limit`() = runBlocking {
+        receiver.bufferFirst = true
+        val impatient = HandoffCoordinator(
+            trust = trust, publisher = publisher, local = local, prompt = PairingPrompt { _, _ -> codes.removeFirstOrNull() }, scope = scope,
+            connect = { url -> SenderConnection.connect(url, SenderIdentity("a1b2c3d4-e5f6-4789-8abc-def012345678", "Phone")) },
+            stateTimeoutMs = 60_000, reconnectWindowMs = 0, overlapMaxMs = 400,
+        )
+        assertTrue(impatient.sendTo(target, media))
+
+        withTimeout(5_000) { impatient.state.first { it is LinkState.Remote && !it.starting } }
+        assertFalse(local.isPlaying)
+    }
+
+    @Test
     fun `first send pairs, hands off at the phone position and pauses locally`() = runBlocking {
         assertTrue(coordinator.sendTo(target, media))
+        awaitRemote { !it.starting }
 
         assertEquals(1, trust.tokens.size)
         val handoff = receiver.lastHandoff!!

@@ -14,7 +14,7 @@ import kotlin.math.abs
 data class LibraryVideo(val id: Long, val displayName: String, val title: String?, val bucket: String?, val durationMs: Long?, val mime: String?, val size: Long)
 
 /**
- * Finds the file another app is playing from what its media session says. Samsung's Video Player
+ * Finds the file another app is playing from what its media session says. The system video player
  * (where Gallery sends a video played full screen) gives the title, the album (= folder) and the
  * duration, which on the A15 pointed at exactly one file. Apps that give no title (Gallery's own
  * inline player) can't be resolved here.

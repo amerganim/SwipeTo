@@ -15,7 +15,7 @@ enum class AimPhase { IDLE, AIMING }
  *
  * The rise is measured **relative** to where the phone just was, not as an absolute angle: people
  * watch with the phone anywhere from -40 to -75 degrees, and a laptop on a desk is below eye level,
- * so "pointing at the screen" can be as low as -35 (measured on a Galaxy A15, see AIM_TUNING.md).
+ * so "pointing at the screen" can be as low as -35 (measured on the A15 test phone, see AIM_TUNING.md).
  *
  * Enter AIMING when, at once:
  * - the elevation is inside the band [AimConfig.bandMinDeg]..[AimConfig.bandMaxDeg],

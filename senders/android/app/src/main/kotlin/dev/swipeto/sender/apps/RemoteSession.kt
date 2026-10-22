@@ -21,7 +21,7 @@ interface RemoteActions {
 /**
  * While a screen plays, the phone's standard media controls (notification shade, lock screen) work
  * the screen: "Playing on Laptop" with play/pause, seek bar, ±10 s, Bring back and Stop. Found on the
- * A15: after a swipe from Samsung's Video Player there was no way to control or close the laptop
+ * A15: after a swipe from the system video player there was no way to control or close the laptop
  * without opening SwipeTo.
  */
 class RemoteSession(private val context: Context, private val actions: RemoteActions) {

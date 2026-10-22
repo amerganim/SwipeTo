@@ -25,7 +25,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 /**
- * Swiping from other apps (Phase 5B). A foreground service, so Samsung does not freeze SwipeTo while
+ * Swiping from other apps (Phase 5B). A foreground service, so the system does not freeze SwipeTo while
  * Gallery or YouTube is in front; it shows the swipe bubble over them when the phone is raised toward
  * a screen, and keeps a quiet notification with the state (and Bring back while a screen plays).
  * All the work is done by the app-wide [MainViewModel].

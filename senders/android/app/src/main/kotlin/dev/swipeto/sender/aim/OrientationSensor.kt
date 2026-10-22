@@ -17,7 +17,7 @@ import kotlin.math.sqrt
  *
  * Prefers the game rotation vector (accelerometer + gyroscope, no magnetometer: fast and not thrown
  * off by speakers or steel furniture); falls back to the rotation vector, then the gravity sensor,
- * and finally the raw accelerometer through a low-pass filter. Many budget phones (the Galaxy A15
+ * and finally the raw accelerometer through a low-pass filter. Many budget phones (the A15 test phone
  * among them) have no gyroscope and so none of the first three. Rotation about the camera axis
  * (portrait vs landscape) does not change the elevation.
  */

@@ -121,7 +121,7 @@ class RaiseToAimDetectorTest {
 
     @Test
     fun `recorded A15 trace - five raises toward a laptop, four held long enough, no false triggers`() {
-        // Real data: Galaxy A15, filtered accelerometer, a person watching then raising to a laptop.
+        // Real data: the A15 test phone, filtered accelerometer, a person watching then raising to a laptop.
         val trace = javaClass.getResource("/a15-raises.csv")!!.readText().lineSequence()
             .filter { it.isNotBlank() && !it.startsWith("#") }
             .map { line -> line.split(',').let { OrientationSample(it[0].toLong(), it[1].toFloat()) } }

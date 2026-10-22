@@ -1,4 +1,4 @@
-# Camera elevation recorded on a Galaxy A15 (filtered accelerometer, no gyroscope), 2026-10-22.
+# Camera elevation recorded on the A15 test phone (filtered accelerometer, no gyroscope), 2026-10-22.
 # A person watching a video, then five slow raises toward a laptop on a desk and back.
 # Columns: milliseconds since start, elevation in degrees. Sampled every ~80 ms.
 0,-87.6

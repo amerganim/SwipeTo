@@ -45,7 +45,7 @@ sealed interface AimState {
  * current position), repeated with every heartbeat, so the screen has the video loaded and paused
  * by the time the swipe arrives (docs/protocol.md, 5.3). Screens that merely glow get no prefetch.
  *
- * Tuned on a Galaxy A15, where people swipe the moment the screen glows: a single faced screen is
+ * Tuned on the A15 test phone, where people swipe the moment the screen glows: a single faced screen is
  * targeted immediately (the camera may still upgrade it to verified), a swipe while still choosing
  * takes the best guess, and lowering keeps the target for [graceMs] because the swipe itself tips
  * the phone down.

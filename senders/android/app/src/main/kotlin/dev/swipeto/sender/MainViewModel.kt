@@ -521,7 +521,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Keeps SwipeTo alive while other apps are in front (Samsung freezes background apps within a
+     * Keeps SwipeTo alive while other apps are in front (some Android builds freeze background apps within a
      * minute, seen on the A15), so it can follow what they play and react to a raise.
      */
     private fun startBackgroundService() {
@@ -582,7 +582,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * After a swipe from another app the screen plays and that app is paused. If the user then plays
-     * it on the phone again (seen on the A15: they pressed play in Samsung's Video Player to control
+     * it on the phone again (seen on the A15: they pressed play in the system video player to control
      * the laptop), they want to watch here: bring it back, at the screen's position.
      */
     private fun watchHandedFromApp() {

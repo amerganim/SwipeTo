@@ -9,7 +9,7 @@ class LocalMediaResolverTest {
         LibraryVideo(id, name, name.substringBeforeLast('.'), bucket, duration, "video/mp4", 1_000)
 
     @Test
-    fun `Samsung Video Player's title, album and duration pick the one file`() {
+    fun `A video player's title, album and duration pick the one file`() {
         // What the A15 reported: title=swipeto-sample, ALBUM=SwipeTo, DURATION=180033.
         val sample = video(7, "swipeto-sample.mp4", "SwipeTo", 180_000)
         val match = LocalMediaResolver.chooseMatch(listOf(sample), "swipeto-sample", "SwipeTo", 180_033)

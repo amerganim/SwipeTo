@@ -39,7 +39,7 @@ class SwipeAndMarkerTest {
     }
 
     @Test
-    fun `natural thumb swipes recorded on a Galaxy A15 count`() {
+    fun `natural thumb swipes recorded on the A15 test phone count`() {
         // (dx, dy, ms, vy) from logcat while a person swiped up to send.
         assertEquals(Swipe.UP, swipes.classify(141f, -227f, 500, -3297f))
         assertEquals(Swipe.UP, swipes.classify(55f, -84f, 174, -1691f))

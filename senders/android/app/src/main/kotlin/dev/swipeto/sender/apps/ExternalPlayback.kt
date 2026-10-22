@@ -3,7 +3,7 @@ package dev.swipeto.sender.apps
 import dev.swipeto.sender.handoff.LocalPlayback
 
 /**
- * Another app's player (Samsung Video Player, YouTube...) as handoff sees it: position and play
+ * Another app's player (the system video player, YouTube...) as handoff sees it: position and play
  * state from its media session, pause and resume through its transport controls.
  */
 class ExternalPlayback(private val watcher: ActiveMediaWatcher, val packageName: String) : LocalPlayback {

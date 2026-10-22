@@ -8,7 +8,7 @@ enum class Sensitivity { LOW, NORMAL, HIGH }
  * does and how to tune it on a phone).
  *
  * Angles are the **camera elevation**: where the back camera points, in degrees above the horizon.
- * Lying flat face up = -90, held upright = 0, pointing at the ceiling = +90. Measured on a Galaxy A15:
+ * Lying flat face up = -90, held upright = 0, pointing at the ceiling = +90. Measured on the A15 test phone:
  * watching a video, -45 to -75; pointing at a laptop on a desk, -27 to -37 (a wall TV is nearer 0).
  * So aiming is a *rise* relative to the moment before, not a fixed angle.
  */
@@ -41,7 +41,7 @@ data class AimConfig(
 
 /** Swipe thresholds, in dp and dp/s, measured on the video surface. */
 data class SwipeConfig(
-    // Tuned on a Galaxy A15: natural thumb swipes arc 30-50 degrees off vertical and are often under
+    // Tuned on the A15 test phone: natural thumb swipes arc 30-50 degrees off vertical and are often under
     // 100 dp. Loose is safe here, because swipe-up only acts while the phone is aimed at a screen.
     val minDistanceDp: Float = 70f,
     val minVelocityDpPerSec: Float = 650f,

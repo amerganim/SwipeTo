@@ -40,6 +40,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.composed
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -62,8 +64,16 @@ import dev.swipeto.sender.data.AppSettings
 /**
  * Reports deliberate vertical swipes over this element without taking touches away from what is
  * underneath (the player still gets its taps): it only watches the Initial pass, never consumes.
+ *
+ * The gesture loop outlives recompositions, so it calls the *latest* [onSwipe] (found on the A15:
+ * holding on to the first one meant every swipe still saw "no video loaded").
  */
-fun Modifier.verticalSwipes(classifier: SwipeClassifier, onSwipe: (Swipe) -> Unit): Modifier = pointerInput(classifier) {
+fun Modifier.verticalSwipes(classifier: SwipeClassifier, onSwipe: (Swipe) -> Unit): Modifier = composed {
+    val currentOnSwipe by rememberUpdatedState(onSwipe)
+    swipeGestures(classifier) { currentOnSwipe(it) }
+}
+
+private fun Modifier.swipeGestures(classifier: SwipeClassifier, onSwipe: (Swipe) -> Unit): Modifier = pointerInput(classifier) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
         val tracker = VelocityTracker()

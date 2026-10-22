@@ -248,6 +248,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun swipeUp(): Boolean {
         val picked = _video.value ?: return false
+        Log.i(TAG, "swipe up while ${aimState.value::class.simpleName}")
         when (aimState.value) {
             is AimState.Targeted -> Unit
             is AimState.Searching -> {

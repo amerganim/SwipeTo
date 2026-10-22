@@ -12,6 +12,8 @@ import android.os.IBinder
 import dev.swipeto.sender.aim.AimState
 import dev.swipeto.sender.aim.Swipe
 import dev.swipeto.sender.apps.BubbleState
+import dev.swipeto.sender.apps.RemoteActions
+import dev.swipeto.sender.apps.RemoteSession
 import dev.swipeto.sender.apps.SwipeBubble
 import dev.swipeto.sender.data.EventLog
 import dev.swipeto.sender.handoff.LinkState
@@ -32,6 +34,7 @@ class SwipeToService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val engine get() = (application as SwipeToApp).engine
     private lateinit var bubble: SwipeBubble
+    private lateinit var remote: RemoteSession
     private lateinit var notifications: NotificationManager
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -45,6 +48,15 @@ class SwipeToService : Service() {
             },
         )
         startForegroundCompat(notification("Ready to send to a screen"))
+        remote = RemoteSession(this, object : RemoteActions {
+            override fun setPlaying(play: Boolean) = engine.setRemotePlaying(play)
+            override fun seekTo(positionMs: Long) = engine.seekTo(positionMs)
+            override fun skip(deltaMs: Long) = engine.skip(deltaMs)
+            override fun bringBack() {
+                engine.bringBack()
+            }
+            override fun stopOnScreen() = engine.stopOnScreen()
+        })
         bubble = SwipeBubble(
             this,
             engine.swipes,
@@ -68,16 +80,17 @@ class SwipeToService : Service() {
                     else -> BubbleState.Hidden
                 }
                 bubble.show(state)
+                // While a screen plays, the phone's standard media controls work it.
+                remote.update(link as? LinkState.Remote)
                 notifications.notify(
                     ID,
-                    notification(
-                        when {
-                            link is LinkState.Remote -> "Playing on ${link.receiverName}"
-                            external != null -> "${external.item.title}: lift the phone toward a screen to send it"
-                            else -> "Ready to send to a screen"
-                        },
-                        bringBack = link is LinkState.Remote,
-                    ),
+                    if (link is LinkState.Remote) {
+                        remote.notification(base(), link) { name -> action(name, name.hashCode()) }
+                    } else {
+                        notification(
+                            if (external != null) "${external.item.title}: lift the phone toward a screen to send it" else "Ready to send to a screen",
+                        )
+                    },
                 )
             }
         }
@@ -99,8 +112,9 @@ class SwipeToService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_BRING_BACK -> engine.bringBack()
+        val name = intent?.action ?: return START_STICKY
+        if (remote.handle(name)) return START_STICKY
+        when (name) {
             ACTION_STOP -> {
                 engine.settings.setOtherApps(false)
                 stopSelf()
@@ -111,6 +125,7 @@ class SwipeToService : Service() {
 
     override fun onDestroy() {
         bubble.remove()
+        remote.update(null)
         scope.cancel()
         EventLog.i("background service stopped")
         super.onDestroy()
@@ -124,20 +139,17 @@ class SwipeToService : Service() {
         }
     }
 
-    private fun notification(text: String, bringBack: Boolean = false): Notification {
-        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-        return Notification.Builder(this, CHANNEL)
-            .setSmallIcon(android.R.drawable.ic_menu_upload)
-            .setContentTitle("SwipeTo")
-            .setContentText(text)
-            .setContentIntent(open)
-            .setOngoing(true)
-            .apply {
-                if (bringBack) addAction(Notification.Action.Builder(null, "Bring back", action(ACTION_BRING_BACK, 1)).build())
-                addAction(Notification.Action.Builder(null, "Turn off", action(ACTION_STOP, 2)).build())
-            }
-            .build()
-    }
+    private fun base(): Notification.Builder = Notification.Builder(this, CHANNEL)
+        .setSmallIcon(android.R.drawable.ic_menu_upload)
+        .setContentIntent(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE))
+        .setOngoing(true)
+        .setOnlyAlertOnce(true)
+
+    private fun notification(text: String): Notification = base()
+        .setContentTitle("SwipeTo")
+        .setContentText(text)
+        .addAction(Notification.Action.Builder(null, "Turn off", action(ACTION_STOP, 2)).build())
+        .build()
 
     private fun action(name: String, code: Int) =
         PendingIntent.getService(this, code, Intent(this, SwipeToService::class.java).setAction(name), PendingIntent.FLAG_IMMUTABLE)
@@ -147,7 +159,6 @@ class SwipeToService : Service() {
     private companion object {
         const val CHANNEL = "ready"
         const val ID = 1
-        const val ACTION_BRING_BACK = "dev.swipeto.sender.BRING_BACK"
         const val ACTION_STOP = "dev.swipeto.sender.STOP"
     }
 }

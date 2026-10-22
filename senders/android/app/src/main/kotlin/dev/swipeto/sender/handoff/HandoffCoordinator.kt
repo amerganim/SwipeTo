@@ -199,8 +199,18 @@ class HandoffCoordinator(
 
     fun togglePlay() {
         val remote = _state.value as? LinkState.Remote ?: return
-        val action = if (remote.playing) ControlAction.PAUSE else ControlAction.PLAY
-        if (sendControl(action)) _state.value = remote.copy(playing = !remote.playing)
+        setPlaying(!remote.playing)
+    }
+
+    fun setPlaying(play: Boolean) {
+        val remote = _state.value as? LinkState.Remote ?: return
+        if (sendControl(if (play) ControlAction.PLAY else ControlAction.PAUSE)) _state.value = remote.copy(playing = play)
+    }
+
+    /** Closes playback on the screen; the phone stays paused where the screen stopped (its final `state`). */
+    fun stopOnScreen() {
+        if (_state.value !is LinkState.Remote) return
+        sendControl(ControlAction.STOP)
     }
 
     fun seekTo(positionMs: Long) {

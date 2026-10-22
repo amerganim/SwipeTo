@@ -325,6 +325,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         },
                     )
                 }
+                watchHandedFromApp()
                 _external.value = resolved
                 _unresolved.value = session?.takeIf { resolved == null }
                 warmLinks()
@@ -439,6 +440,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (start) aim.onAimStart() else aim.endNow()
     }
 
+    /** The other app's player was seen paused after the handoff, so its playing again is the user's doing. */
+    private var handedFromAppPaused = false
+
+    /**
+     * After a swipe from another app the screen plays and that app is paused. If the user then plays
+     * it on the phone again (seen on the A15: they pressed play in Samsung's Video Player to control
+     * the laptop), they want to watch here: bring it back, at the screen's position.
+     */
+    private fun watchHandedFromApp() {
+        val from = handedFrom as? ExternalPlayback ?: return
+        val remote = link.value as? LinkState.Remote ?: return
+        if (remote.starting || remote.reconnecting) return
+        val session = mediaWatcher.session(from.packageName)
+        if (session?.playing != true) {
+            handedFromAppPaused = true
+        } else if (handedFromAppPaused) {
+            handedFromAppPaused = false
+            EventLog.i("${session.appLabel} plays again on the phone: bringing it back")
+            bringBack()
+        }
+    }
+
     /** Swipe up on the bubble over another app (or on SwipeTo's own video). */
     suspend fun swipeUpFromAnywhere(): Boolean = swipeUp()
 
@@ -474,6 +497,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         EventLog.i("swipe up: handing off ${picked.title} to ${target.name}${source.app?.let { " from $it" } ?: ""}")
         handedFrom = source.playback
+        handedFromAppPaused = false
         val sent = coordinator.sendTo(
             Target(receiver.id, receiver.name, receiver.webSocketUrl, receiver.host),
             sharedMedia(picked),
@@ -645,6 +669,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun togglePlay() = coordinator.togglePlay()
+
+    fun setRemotePlaying(play: Boolean) = coordinator.setPlaying(play)
+
+    fun stopOnScreen() = coordinator.stopOnScreen()
+
+    fun skip(deltaMs: Long) {
+        (link.value as? LinkState.Remote)?.let { coordinator.seekTo((it.positionMs + deltaMs).coerceAtLeast(0)) }
+    }
 
     fun seekTo(positionMs: Long) = coordinator.seekTo(positionMs)
 

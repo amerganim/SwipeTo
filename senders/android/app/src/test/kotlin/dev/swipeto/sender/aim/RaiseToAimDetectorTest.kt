@@ -98,15 +98,40 @@ class RaiseToAimDetectorTest {
 
     @Test
     fun `casual handling while watching does not trigger`() {
-        // Twenty minutes of watching: wandering between -70 and -25 with tremor, occasional tilts.
+        // Twenty minutes of watching: a slow wander between -75 and -40 (as recorded on the A15) plus
+        // hand tremor of a couple of degrees, sample to sample.
         val random = Random(42)
-        var e = -45f
+        var pose = -55f
         repeat(60_000) {
-            e = (e + random.nextFloat() * 4 - 2).coerceIn(-70f, -25f)
-            feed(e)
+            pose = (pose + random.nextFloat() * 0.8f - 0.4f).coerceIn(-75f, -40f)
+            feed(pose + random.nextFloat() * 4 - 2)
         }
 
         assertTrue(changes.isEmpty(), "false triggers: $changes")
+    }
+
+    @Test
+    fun `raising toward a laptop on a desk aims even though the camera still points down`() {
+        hold(-60f, 1_000, noise = 3f)
+        ramp(-60f, -32f, 350)
+        hold(-32f, 500, noise = 2f)
+
+        assertEquals(listOf(AimPhase.AIMING), changes.map { it.second })
+    }
+
+    @Test
+    fun `recorded A15 trace - five raises toward a laptop, four held long enough, no false triggers`() {
+        // Real data: Galaxy A15, filtered accelerometer, a person watching then raising to a laptop.
+        val trace = javaClass.getResource("/a15-raises.csv")!!.readText().lineSequence()
+            .filter { it.isNotBlank() && !it.startsWith("#") }
+            .map { line -> line.split(',').let { OrientationSample(it[0].toLong(), it[1].toFloat()) } }
+            .toList()
+        val aims = trace.mapNotNull { sample -> detector.onSample(sample)?.let { sample to it } }
+            .filter { it.second == AimPhase.AIMING }
+
+        // The fifth raise peaked for under 100 ms and dropped straight back: not an aim.
+        assertEquals(4, aims.size, "aims at ${aims.map { it.first }}")
+        assertTrue(aims.all { it.first.elevationDeg in -40f..-20f })
     }
 
     @Test
@@ -115,7 +140,7 @@ class RaiseToAimDetectorTest {
         val high = AimConfig.forSensitivity(Sensitivity.HIGH)
 
         assertTrue(low.dwellMs > AimConfig().dwellMs && high.dwellMs < AimConfig().dwellMs)
-        assertTrue(low.raisedFromBelowDeg < high.raisedFromBelowDeg)
+        assertTrue(low.minRiseDeg > high.minRiseDeg)
     }
 
     @Test

@@ -297,9 +297,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         aimJob = viewModelScope.launch {
             var lastDebug = 0L
             orientation.samples().collect { sample ->
-                if (sample.timeMs - lastDebug >= 100) {
+                if (sample.timeMs - lastDebug >= 80) {
                     lastDebug = sample.timeMs
                     _aimDebug.value = AimDebug(orientation.sensorName, sample.elevationDeg, detector.phase)
+                    // With the debug panel on, keep a trace for tuning thresholds against real motion.
+                    if (settings.debugOverlay.value) Log.d("SwipeToTrace", "%d %.1f %s".format(sample.timeMs, sample.elevationDeg, detector.phase))
                 }
                 when (detector.onSample(sample)) {
                     AimPhase.AIMING -> {

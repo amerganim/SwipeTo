@@ -32,6 +32,9 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, YouTubeL
 
     /// <summary>A playing prefetch this close to the handoff position is shown without a seek.</summary>
     private const long WarmToleranceMs = 400;
+
+    /// <summary>How long the last frame stays after a video ends.</summary>
+    private const int EndLingerMs = 2_000;
     private static readonly HashSet<string> ImageTypes = ["image/jpeg", "image/png", "image/gif", "image/bmp", "image/webp", "image/tiff"];
     /// <summary>
     /// For the phone's media server. Fails fast so <see cref="HttpRangeStream"/> retries soon: after a
@@ -337,6 +340,7 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, YouTubeL
                 _wantPlaying = false;
             }
             RaiseChanged();
+            CloseAfterEnd();
         };
         player.MediaFailed += (_, e) =>
         {
@@ -459,6 +463,7 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, YouTubeL
                 _ended = true;
                 _wantPlaying = false;
             }
+            CloseAfterEnd();
         }
         if (changed) RaiseChanged();
     }
@@ -587,6 +592,23 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, YouTubeL
         }
         log.LogInformation("Player closed {By} at {Position} ms", by, _lastPositionMs);
         RaiseChanged();
+    }
+
+    /**
+     * The video finished: leave the last frame up a moment, then close, unless something new was handed
+     * off meanwhile. (Before, the last frame stayed until someone pressed Esc: seen on the A15 test run.)
+     */
+    private void CloseAfterEnd()
+    {
+        string? ended;
+        lock (_gate) ended = _currentUrl;
+        ui.TryEnqueue(async () =>
+        {
+            await Task.Delay(EndLingerMs);
+            bool still;
+            lock (_gate) still = _ended && _currentUrl == ended;
+            if (still) EndPlayback("at the end");
+        });
     }
 
     private PrefetchedVideo? TakePrefetch(string url)

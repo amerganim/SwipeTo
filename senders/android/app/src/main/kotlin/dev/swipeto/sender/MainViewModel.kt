@@ -1,6 +1,10 @@
 package dev.swipeto.sender
 
 import android.app.Application
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
+import android.os.Build
 import android.media.MediaMetadataRetriever
 import android.net.ConnectivityManager
 import android.net.Network
@@ -12,7 +16,12 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
+import dev.swipeto.protocol.MediaInfo
 import dev.swipeto.protocol.MediaKind
+import dev.swipeto.protocol.Prefetch
+import dev.swipeto.protocol.Prepare
+import dev.swipeto.sender.aim.Preparer
+import dev.swipeto.protocol.Transition
 import dev.swipeto.sender.aim.AimConfig
 import dev.swipeto.sender.aim.AimController
 import dev.swipeto.sender.aim.AimOption
@@ -45,7 +54,9 @@ import dev.swipeto.sender.handoff.Target
 import dev.swipeto.sender.media.ContentMediaFile
 import dev.swipeto.sender.media.LocalMediaServer
 import dev.swipeto.sender.media.ServerPublisher
+import dev.swipeto.sender.net.ReceiverException
 import dev.swipeto.sender.net.SenderConnection
+import okhttp3.OkHttpClient
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -62,7 +73,17 @@ import kotlinx.coroutines.withContext
 
 private const val TAG = "SwipeTo"
 
-data class PickedVideo(val uri: Uri, val title: String, val mime: String, val size: Long, val durationMs: Long?)
+/** Photos are decoded down to about this many pixels on the long side for the phone's own screen. */
+private const val PHOTO_MAX_PX = 1600
+
+/** A picked video or photo. */
+data class PickedItem(val uri: Uri, val title: String, val mime: String, val size: Long, val durationMs: Long?, val kind: MediaKind)
+
+/** What was picked: one item, or several to page through with left/right swipes. */
+data class Album(val items: List<PickedItem>, val index: Int) {
+    val current: PickedItem get() = items[index]
+    val isAlbum: Boolean get() = items.size > 1
+}
 
 data class ReceiverItem(val receiver: DiscoveredReceiver, val paired: Boolean)
 
@@ -87,6 +108,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val trust = TrustStore(app)
     private val discovery = ReceiverDiscovery(app)
     private val server = LocalMediaServer()
+    private val publisher = ServerPublisher(server) { socket -> wifi?.bindSocket(socket) }
+
+    /**
+     * The Wi-Fi network, once seen. Screens are reached over it even while Android routes the rest
+     * through mobile data (Wi-Fi without internet, or just back and not validated yet): found on the
+     * A15, where reconnects after a Wi-Fi blip went out over mobile data and never reached the PC.
+     */
+    @Volatile private var wifi: Network? = null
+    @Volatile private var wifiSeen = false
+    private var wifiClient: Pair<Network, OkHttpClient>? = null
+    private val files = mutableMapOf<Uri, ContentMediaFile>()
     private val connectivity = app.getSystemService(ConnectivityManager::class.java)
     val settings = AppSettings(app)
     private val orientation = OrientationSensor(app)
@@ -112,8 +144,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _needsCameraPermission = MutableStateFlow(false)
     val needsCameraPermission: StateFlow<Boolean> = _needsCameraPermission.asStateFlow()
 
-    private val _video = MutableStateFlow<PickedVideo?>(null)
-    val video: StateFlow<PickedVideo?> = _video.asStateFlow()
+    private val _album = MutableStateFlow<Album?>(null)
+    val album: StateFlow<Album?> = _album.asStateFlow()
+
+    /** The item on the phone now (shown, or the one the screen has). */
+    private val _media = MutableStateFlow<PickedItem?>(null)
+    val media: StateFlow<PickedItem?> = _media.asStateFlow()
+
+    /** The current photo, decoded for the phone's screen; null for a video. */
+    private val _photo = MutableStateFlow<Bitmap?>(null)
+    val photo: StateFlow<Bitmap?> = _photo.asStateFlow()
 
     private val _pairing = MutableStateFlow<PairingRequest?>(null)
     val pairing: StateFlow<PairingRequest?> = _pairing.asStateFlow()
@@ -123,7 +163,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val coordinator = HandoffCoordinator(
         trust = trust,
-        publisher = ServerPublisher(server),
+        publisher = publisher,
         local = object : LocalPlayback {
             override val positionMs get() = player.currentPosition
             override val isPlaying get() = player.isPlaying || (player.playWhenReady && player.playbackState == ExoPlayer.STATE_BUFFERING)
@@ -143,7 +183,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         },
         scope = viewModelScope,
-        connect = { url -> SenderConnection.connect(url, trust.identity, log = { EventLog.i(it) }) },
+        connect = ::connectToScreen,
         log = { EventLog.i(it) },
     )
 
@@ -153,7 +193,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val links = StandbyLinks(
         scope = viewModelScope,
         trust = trust,
-        connect = { url -> SenderConnection.connect(url, trust.identity, log = { EventLog.i(it) }) },
+        connect = ::connectToScreen,
         log = { EventLog.i(it) },
     )
 
@@ -175,17 +215,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // The camera proved which screen is in front: remember which way that is.
             if (targeted.verified) learnBearing(targeted.target.id, fromCamera = true)
         },
+        prefetch = { target -> prefetchFor(target) },
+        // A prefetch published the file for that screen; without a handoff it must stop being served
+        // (unless it is being prepared there, which keeps the same URL).
+        onEnded = { if (link.value is LinkState.Idle && !preparer.active) publisher.endSession() },
         log = { EventLog.i(it) },
     )
 
     val aimState: StateFlow<AimState> = aim.state
+
+    private val preparer = Preparer(
+        scope = viewModelScope,
+        links = links,
+        target = ::screenToPrepare,
+        what = { target ->
+            prefetchFor(target)?.takeIf { player.isPlaying && settings.prepareScreen.value && onUnmeteredWifi() }
+                ?.let { Prepare(it.media, it.positionMs) }
+        },
+        log = { EventLog.i(it) },
+    )
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         private var current: Network? = null
 
         override fun onLost(network: Network) {
             if (network == current) current = null
-            viewModelScope.launch { coordinator.onConnectionLost() }
+            if (network == wifi) wifi = null
+            // The screen keeps playing; the coordinator reconnects once Wi-Fi is back (or takes it back here).
+            viewModelScope.launch { coordinator.onNetworkLost() }
         }
 
         override fun onAvailable(network: Network) {
@@ -193,6 +250,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // just the network we started on.)
             val changed = current != null && current != network
             current = network
+            wifi = network
+            wifiSeen = true
+            EventLog.i("Wi-Fi available")
+            coordinator.onNetworkAvailable()
             if (changed) viewModelScope.launch(Dispatchers.Default) { discovery.restart() }
         }
     }
@@ -225,6 +286,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     stopAiming()
                 }
+                updatePreparing()
             }
         }
     }
@@ -240,6 +302,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             viewModelScope.launch { links.closeAll() }
         }
         updateAiming()
+        updatePreparing()
     }
 
     fun onCameraPermissionResult(granted: Boolean) {
@@ -259,6 +322,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 false
             }
         }
+        Swipe.LEFT -> page(+1)
+        Swipe.RIGHT -> page(-1)
+    }
+
+    /** Album paging: on the phone, or on the screen (with a slide) while it has the album. */
+    private suspend fun page(step: Int): Boolean {
+        val album = _album.value?.takeIf { it.isAlbum } ?: return false
+        val index = album.index + step
+        if (index !in album.items.indices) {
+            _hints.tryEmit(if (step > 0) "That was the last one." else "This is the first one.")
+            return false
+        }
+        val next = album.items[index]
+        if (link.value is LinkState.Remote) {
+            val shown = coordinator.show(sharedMedia(next), if (step > 0) Transition.NEXT else Transition.PREVIOUS)
+            if (!shown) return false
+            showLocally(album.copy(index = index), play = false)
+        } else {
+            showLocally(album.copy(index = index), play = true)
+        }
+        return true
     }
 
     /** Debug overlay: behave as if the phone had just been raised (or lowered). */
@@ -268,7 +352,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun swipeUp(): Boolean {
-        val picked = _video.value ?: return false
+        val picked = _media.value ?: return false
         EventLog.i("swipe up while ${aimState.value::class.simpleName}")
         when (aimState.value) {
             is AimState.Targeted -> Unit
@@ -331,7 +415,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     AimPhase.AIMING -> {
                         headingAtRaise = sample.headingDeg
                         EventLog.i("raise detected at %.1f°, heading %s".format(sample.elevationDeg, sample.headingDeg?.let { "%.0f°".format(it) } ?: "unknown"))
-                        if (_video.value != null) aim.onAimStart()
+                        if (_media.value != null) aim.onAimStart()
                     }
                     AimPhase.IDLE -> {
                         EventLog.i("lowered at %.1f°".format(sample.elevationDeg))
@@ -372,28 +456,81 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         discovery.receivers.value.filter { trust.isPaired(it.id) }.map { LinkTarget(it.id, it.name, it.webSocketUrl) }
 
     private fun warmLinks() {
-        if (!foreground || link.value !is LinkState.Idle || _video.value == null) return
+        if (!foreground || link.value !is LinkState.Idle || _media.value == null) return
         viewModelScope.launch { links.warm(pairedTargets()) }
     }
 
-    private fun sharedMedia(picked: PickedVideo): SharedMedia {
-        val file = ContentMediaFile(getApplication<Application>().contentResolver, picked.uri, picked.mime, picked.size)
-        return SharedMedia(file, MediaKind.VIDEO, picked.title, picked.durationMs ?: player.duration.takeIf { it > 0 })
+    /** The same [ContentMediaFile] per item, so the publisher hands out the same URL (prefetch, then handoff). */
+    private fun sharedMedia(picked: PickedItem): SharedMedia {
+        val file = files.getOrPut(picked.uri) { ContentMediaFile(getApplication<Application>().contentResolver, picked.uri, picked.mime, picked.size) }
+        val duration = if (picked.kind == MediaKind.VIDEO) picked.durationMs ?: player.duration.takeIf { it > 0 } else null
+        return SharedMedia(file, picked.kind, picked.title, duration)
     }
 
-    fun onVideoPicked(uri: Uri) = viewModelScope.launch {
-        val picked = withContext(Dispatchers.IO) { describe(uri) } ?: return@launch
+    /** What a swipe toward [target] would send, published for it, at the phone's position. Videos only. */
+    private suspend fun prefetchFor(target: LinkTarget): Prefetch? {
+        val item = _media.value?.takeIf { it.kind == MediaKind.VIDEO } ?: return null
+        val receiver = discovery.receivers.value.firstOrNull { it.id == target.id } ?: return null
+        val shared = sharedMedia(item)
+        val url = publisher.publish(shared.file, receiver.host)
+        return Prefetch(MediaInfo(MediaKind.VIDEO, url, shared.file.mime, shared.title, shared.durationMs), player.currentPosition)
+    }
+
+    fun onMediaPicked(uris: List<Uri>) = viewModelScope.launch {
+        val picked = withContext(Dispatchers.IO) { uris.mapNotNull(::describe) }
+        if (picked.isEmpty()) {
+            _hints.tryEmit("Couldn't open that. Pick a video or photo saved on this phone.")
+            return@launch
+        }
         if (link.value !is LinkState.Idle) coordinator.bringBack()
-        _video.value = picked
-        player.setMediaItem(MediaItem.fromUri(uri))
-        player.prepare()
-        player.play()
+        files.clear()
+        showLocally(Album(picked, 0), play = true)
         warmLinks()
         updateAiming()
     }
 
+    /** Makes [album]'s current item the one on the phone: a video in the player, or a decoded photo. */
+    private suspend fun showLocally(album: Album, play: Boolean) {
+        _album.value = album
+        val item = album.current
+        _media.value = item
+        if (item.kind == MediaKind.VIDEO) {
+            _photo.value = null
+            player.setMediaItem(MediaItem.fromUri(item.uri))
+            player.prepare()
+            player.playWhenReady = play
+        } else {
+            player.stop()
+            player.clearMediaItems()
+            _photo.value = withContext(Dispatchers.IO) { decodePhoto(item.uri) }
+        }
+    }
+
+    private fun decodePhoto(uri: Uri): Bitmap? = runCatching {
+        val resolver = getApplication<Application>().contentResolver
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            // ImageDecoder applies the EXIF rotation, so portrait photos stand up.
+            ImageDecoder.decodeBitmap(ImageDecoder.createSource(resolver, uri)) { decoder, info, _ ->
+                val longest = maxOf(info.size.width, info.size.height)
+                var sample = 1
+                while (longest / (sample * 2) >= PHOTO_MAX_PX) sample *= 2
+                decoder.setTargetSampleSize(sample)
+            }
+        } else {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+            var sample = 1
+            while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= PHOTO_MAX_PX) sample *= 2
+            resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample }) }
+        }
+    }.getOrNull()
+
     fun sendTo(receiver: DiscoveredReceiver) = viewModelScope.launch {
-        val picked = _video.value ?: return@launch
+        val picked = _media.value ?: return@launch
+        if (!onLocalNetwork()) {
+            _hints.tryEmit("Connect this phone to the same Wi-Fi as ${receiver.name}.")
+            return@launch
+        }
         // A standby link to this screen would refuse a second hello; use it instead of a new connection.
         val ready = links.take(receiver.id)
         val sent = coordinator.sendTo(Target(receiver.id, receiver.name, receiver.webSocketUrl, receiver.host), sharedMedia(picked), ready)
@@ -421,13 +558,56 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _haptics.tryEmit(Haptic.BROUGHT_BACK)
     }
 
+    /** A WebSocket to a screen, over the Wi-Fi network; fails at once while Wi-Fi is off. */
+    private suspend fun connectToScreen(url: String): SenderConnection {
+        val network = wifi
+        if (network == null && wifiSeen) throw ReceiverException("This phone is not on Wi-Fi")
+        val client = network?.let { net ->
+            wifiClient?.takeIf { it.first == net }?.second
+                ?: SenderConnection.defaultClient.newBuilder().socketFactory(net.socketFactory).build().also { wifiClient = net to it }
+        } ?: SenderConnection.defaultClient
+        return SenderConnection.connect(url, trust.identity, client, log = { EventLog.i(it) })
+    }
+
+    /** Preparing runs while the app is in front and the phone has the media; each tick checks the rest. */
+    private fun updatePreparing() {
+        if (foreground && link.value is LinkState.Idle) {
+            preparer.start()
+        } else {
+            val wasPreparing = preparer.active
+            preparer.stop()
+            // Gone to the background: what was published for preparing stops being served.
+            if (wasPreparing && link.value is LinkState.Idle) publisher.endSession()
+        }
+    }
+
+    /** The screen used most recently, if it is paired and on this Wi-Fi now. */
+    private fun screenToPrepare(): LinkTarget? = pairedTargets()
+        .mapNotNull { t -> trust.lastUsed(t.id)?.let { t to it } }
+        .maxByOrNull { it.second }?.first
+
+    private fun onUnmeteredWifi(): Boolean {
+        val network = wifi ?: return false
+        return connectivity.getNetworkCapabilities(network)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == true
+    }
+
+    private fun onLocalNetwork(): Boolean {
+        val caps = connectivity.getNetworkCapabilities(connectivity.activeNetwork) ?: return false
+        return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+    }
+
+    fun finishOnboarding() = settings.setOnboarded(true)
+
     private fun refreshPaired() {
         _receivers.value = _receivers.value.map { it.copy(paired = trust.isPaired(it.receiver.id)) }
     }
 
-    private fun describe(uri: Uri): PickedVideo? {
+    private fun describe(uri: Uri): PickedItem? {
         val resolver = getApplication<Application>().contentResolver
-        var title = "Video"
+        val type = resolver.getType(uri)
+        val kind = if (type?.startsWith("image/") == true) MediaKind.IMAGE else MediaKind.VIDEO
+        val fallbackTitle = if (kind == MediaKind.IMAGE) "Photo" else "Video"
+        var title = fallbackTitle
         var size = -1L
         resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
             if (cursor.moveToFirst()) {
@@ -435,8 +615,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (!cursor.isNull(1)) size = cursor.getLong(1)
             }
         }
-        if (size < 0) size = resolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: return null
-        val mime = resolver.getType(uri)?.takeIf { it.startsWith("video/") } ?: "video/mp4"
+        if (size < 0) size = runCatching { resolver.openFileDescriptor(uri, "r")?.use { it.statSize } }.getOrNull() ?: return null
+        if (kind == MediaKind.IMAGE) {
+            if (title.all(Char::isDigit)) title = fallbackTitle
+            return PickedItem(uri, title.take(200), type ?: "image/jpeg", size, null, kind)
+        }
+        val mime = type?.takeIf { it.startsWith("video/") } ?: "video/mp4"
         val (duration, embeddedTitle) = runCatching {
             MediaMetadataRetriever().use { retriever ->
                 retriever.setDataSource(getApplication(), uri)
@@ -446,12 +630,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }.getOrDefault(null to null)
         // The Photo Picker often names files by media-store id ("1000033915"), which means nothing to anyone.
         if (title.all(Char::isDigit)) title = embeddedTitle?.takeIf { it.isNotBlank() } ?: "Video"
-        return PickedVideo(uri, title.take(200), mime, size, duration)
+        return PickedItem(uri, title.take(200), mime, size, duration, kind)
     }
 
     override fun onCleared() {
+        preparer.stop()
         stopAiming()
-        coordinator.onConnectionLost()
+        coordinator.takeBackNow()
         connectivity.unregisterNetworkCallback(networkCallback)
         discovery.stop()
         server.stop()

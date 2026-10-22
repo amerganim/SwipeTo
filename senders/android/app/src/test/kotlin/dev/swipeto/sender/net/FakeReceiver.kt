@@ -40,6 +40,8 @@ class FakeReceiver(
     private val receiverId: String = "0e1d2c3b-4a59-4687-9a8b-7c6d5e4f3a21",
     var busy: Boolean = false,
     var answerPings: Boolean = true,
+    /** Report `buffering` after a handoff until [showFrames]; like a real screen loading over Wi-Fi. */
+    var bufferFirst: Boolean = false,
     /** The marker nonce this screen is "showing"; aim_start with it locks. */
     var markerNonce: String = "Qm9vVGhlU2NyZWVuTm9uY2U",
 ) : AutoCloseable {
@@ -55,6 +57,9 @@ class FakeReceiver(
         private set
     var lastHandoff: Handoff? = null
         private set
+    val handoffs = CopyOnWriteArrayList<Handoff>()
+    @Volatile var connections = 0
+        private set
     @Volatile var glowing = false
         private set
     @Volatile var locked = false
@@ -63,12 +68,15 @@ class FakeReceiver(
     val url: String
 
     init {
-        repeat(4) { server.enqueue(MockResponse.Builder().webSocketUpgrade(Listener()).build()) }
+        repeat(8) { server.enqueue(MockResponse.Builder().webSocketUpgrade(Listener()).build()) }
         server.start()
         url = server.url("/v1").toString().replaceFirst("http", "ws")
     }
 
     fun push(message: Message) = send(message)
+
+    /** The first frames are up: `state` without `buffering`. */
+    fun showFrames() = send(PlaybackState(positionMs, playing, false))
 
     /** The viewer closed playback on the screen. */
     fun endPlayback() = send(PlaybackState(positionMs, playing = false, ended = true))
@@ -103,6 +111,7 @@ class FakeReceiver(
             this.webSocket = webSocket
             socket = webSocket
             current = this
+            connections++
         }
 
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -144,10 +153,11 @@ class FakeReceiver(
                         reply(HandoffAck(false, ErrorCode.BUSY, replyTo = message.id))
                     } else {
                         lastHandoff = message
+                        handoffs += message
                         positionMs = message.positionMs
                         playing = message.playing
                         reply(HandoffAck(true, replyTo = message.id))
-                        reply(PlaybackState(positionMs, playing, false))
+                        reply(PlaybackState(positionMs, playing, false, buffering = bufferFirst && playing))
                     }
                 }
                 is Control -> {

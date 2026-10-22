@@ -73,15 +73,17 @@ public sealed class SenderClient : IAsyncDisposable
     public Task<HelloAck> HelloAsync(string trustToken) =>
         RequestAsync<HelloAck>(new Hello(_identity.SenderId, _identity.SenderName, trustToken, ProtocolVersion.Current));
 
-    public Task AimStartAsync() => _channel.SendAsync(new AimStart());
+    public Task AimStartAsync(Prefetch? prefetch = null) => _channel.SendAsync(new AimStart(Prefetch: prefetch));
+
+    public Task PrepareAsync(MediaInfo media, long positionMs) => _channel.SendAsync(new Prepare(media, positionMs));
 
     /// <summary>Reports the marker nonce the camera read; the receiver says whether it locks.</summary>
     public Task<AimAck> LockAsync(string nonce) => RequestAsync<AimAck>(new AimStart(nonce));
 
     public Task AimEndAsync() => _channel.SendAsync(new AimEnd());
 
-    public Task<HandoffAck> HandoffAsync(MediaInfo media, long positionMs, bool playing) =>
-        RequestAsync<HandoffAck>(new Handoff(media, positionMs, playing));
+    public Task<HandoffAck> HandoffAsync(MediaInfo media, long positionMs, bool playing, Transition? transition = null) =>
+        RequestAsync<HandoffAck>(new Handoff(media, positionMs, playing, transition));
 
     public Task ControlAsync(ControlAction action, long? positionMs = null) => _channel.SendAsync(new Control(action, positionMs));
 

@@ -90,6 +90,22 @@ public class ProtocolSessionTests
     }
 
     [Fact]
+    public void Prepare_is_for_a_session_without_an_active_handoff()
+    {
+        var phone = new ProtocolSession(Role.Sender);
+        var screen = new ProtocolSession(Role.Receiver);
+        Assert.Equal(ErrorCode.NotPaired, Assert.Throws<ProtocolException>(() => screen.Incoming(new Prepare(Video, 1_000))).Code);
+
+        Exchange(phone, screen, new Hello(SenderId, "Pixel", Token, 1), Role.Sender);
+        Exchange(phone, screen, new HelloAck(ReceiverId, true), Role.Receiver);
+        Exchange(phone, screen, new Prepare(Video, 1_000), Role.Sender);
+        Exchange(phone, screen, new Handoff(Video, 1_000, true), Role.Sender);
+        Exchange(phone, screen, new HandoffAck(true), Role.Receiver);
+
+        Assert.Equal(ErrorCode.BadMessage, Assert.Throws<ProtocolException>(() => screen.Incoming(new Prepare(Video, 2_000))).Code);
+    }
+
+    [Fact]
     public void Control_without_active_handoff_is_bad_message()
     {
         var screen = new ProtocolSession(Role.Receiver);

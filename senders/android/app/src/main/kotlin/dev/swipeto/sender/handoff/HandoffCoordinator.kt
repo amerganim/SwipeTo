@@ -7,6 +7,7 @@ import dev.swipeto.protocol.MediaInfo
 import dev.swipeto.protocol.MediaKind
 import dev.swipeto.protocol.PlaybackState
 import dev.swipeto.protocol.SessionState
+import dev.swipeto.protocol.Transition
 import dev.swipeto.sender.data.TrustTokens
 import dev.swipeto.sender.media.MediaFile
 import dev.swipeto.sender.net.ReceiverException
@@ -15,6 +16,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,6 +26,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import java.net.InetAddress
 
 /** The phone's own player, as far as handoff needs it. */
@@ -59,13 +63,26 @@ sealed interface LinkState {
         val positionMs: Long,
         val playing: Boolean,
         val durationMs: Long?,
+        val kind: MediaKind = MediaKind.VIDEO,
+        /** The connection dropped; the screen carries on while the phone tries to get back to it. */
+        val reconnecting: Boolean = false,
+        /** Handed off, but the screen shows no frames yet: the phone keeps playing meanwhile. */
+        val starting: Boolean = false,
     ) : LinkState
 }
 
 /**
- * Button-triggered handoff (Phase 3): connect, pair if needed, hello, publish the file, hand off at the
- * phone's current position, pause locally, then act as a remote until bring-back. If the screen goes
- * away while it has the media, playback continues on the phone from where the screen last was.
+ * Handoff: connect, pair if needed, hello, publish the file, hand off at the phone's current
+ * position, then act as a remote until bring-back. Album photos are paged on the screen with [show].
+ *
+ * A playing video keeps playing on the phone until the screen reports frames showing (`state`
+ * without `buffering`, docs/protocol.md 5.4), so nobody sees or hears a gap; only then does the
+ * phone pause.
+ *
+ * If the connection drops while the screen has the media, the screen keeps playing and the phone
+ * reconnects for up to [reconnectWindowMs], handing off the same URL at its estimated position (the
+ * screen re-attaches without reloading, docs/protocol.md 5.4). Only if that fails does playback
+ * continue on the phone from where the screen last was.
  *
  * Plain Kotlin, no Android types, so the whole flow is unit-tested against a fake receiver.
  */
@@ -79,6 +96,9 @@ class HandoffCoordinator(
     private val clock: () -> Long = System::currentTimeMillis,
     /** A screen must report `state` every second while it plays; this long without one means it is gone. */
     private val stateTimeoutMs: Long = 6_000,
+    private val reconnectWindowMs: Long = 20_000,
+    private val reconnectRetryMs: Long = 1_000,
+    private val overlapMaxMs: Long = 8_000,
     private val log: (String) -> Unit = {},
 ) {
     private val _state = MutableStateFlow<LinkState>(LinkState.Idle)
@@ -91,7 +111,13 @@ class HandoffCoordinator(
 
     private var connection: SenderConnection? = null
     private var watchers: Job? = null
+    private var reconnect: Job? = null
+    private val retryNow = Channel<Unit>(Channel.CONFLATED)
     private var lastStateAt = 0L
+
+    /** Where the media is and what it is, for reconnecting and album paging. */
+    private var target: Target? = null
+    private var handedOff: MediaInfo? = null
 
     /**
      * Hands [media] to [target]. Returns true once the screen has it. [ready] is an already open,
@@ -117,20 +143,57 @@ class HandoffCoordinator(
             val finished = media.durationMs?.let { local.positionMs >= it - END_SLACK_MS } ?: false
             val playing = media.kind == MediaKind.VIDEO && (local.isPlaying || finished)
             val position = if (media.kind == MediaKind.VIDEO && !finished) local.positionMs else 0L
-            val url = publisher.publish(media.file, target.host)
-            val ack = conn.handoff(MediaInfo(media.kind, url, media.file.mime, media.title, media.durationMs), position, playing)
+            val info = media.info(publisher.publish(media.file, target.host))
+            val ack = conn.handoff(info, position, playing)
             if (!ack.accepted) return fail(refusal(target.name, ack.reason), conn)
 
-            local.pause()
+            val overlap = playing && media.kind == MediaKind.VIDEO
+            if (!overlap) local.pause()
             lastStateAt = clock()
             log("handed off to ${target.name} at $position ms, playing=$playing")
-            _state.value = LinkState.Remote(target.name, media.title, position, playing, media.durationMs)
+            this.target = target
+            handedOff = info
+            _state.value = LinkState.Remote(target.name, media.title, position, playing, media.durationMs, media.kind, starting = overlap)
             watch(conn, target.name)
+            if (overlap) scope.launch {
+                // A screen that never says it shows frames (an older one, or stuck): stop overlapping anyway.
+                delay(overlapMaxMs)
+                if ((_state.value as? LinkState.Remote)?.starting == true) shown("no frames reported after $overlapMaxMs ms")
+            }
             return true
         } catch (e: ReceiverException) {
             return fail(e.code?.let { refusal(target.name, it) } ?: "Lost ${target.name}: ${e.message}", conn)
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
             return fail("${target.name} did not answer.", conn)
+        }
+    }
+
+    /**
+     * Album paging while the screen has the media: shows [media] there, sliding in from the side
+     * [transition] implies. A video starts from the beginning. False if the screen refused or is gone.
+     */
+    suspend fun show(media: SharedMedia, transition: Transition): Boolean {
+        val remote = _state.value as? LinkState.Remote ?: return false
+        val conn = connection?.takeIf { !remote.reconnecting } ?: return false
+        val target = target ?: return false
+        return try {
+            val info = media.info(publisher.publish(media.file, target.host))
+            val playing = media.kind == MediaKind.VIDEO
+            val ack = conn.handoff(info, 0, playing, transition)
+            if (!ack.accepted) {
+                _notices.tryEmit(refusal(target.name, ack.reason))
+                return false
+            }
+            handedOff = info
+            lastStateAt = clock()
+            log("showing ${media.title} on ${target.name} (${transition.wire})")
+            _state.value = remote.copy(title = media.title, positionMs = 0, playing = playing, durationMs = media.durationMs, kind = media.kind)
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log("album handoff failed: $e")
+            false
         }
     }
 
@@ -159,10 +222,83 @@ class HandoffCoordinator(
         finishRemote(position, playing)
     }
 
-    /** The phone left the network (or the app is going away): take the media back locally. */
-    fun onConnectionLost() {
+    /** The app is going away: take the media back locally at once, no reconnecting. */
+    fun takeBackNow() {
         val remote = _state.value as? LinkState.Remote ?: return
-        log("lost ${remote.receiverName}; continuing locally")
+        finishRemote(estimatedPosition(remote), remote.playing)
+    }
+
+    /** The phone's Wi-Fi went away: drop the connection now (not after the 15 s keepalive) and start reconnecting. */
+    fun onNetworkLost() {
+        connection?.let { onLinkLost(it, "the phone's Wi-Fi went away") }
+    }
+
+    /** Wi-Fi is back: a reconnect in progress tries again now instead of after its pause. */
+    fun onNetworkAvailable() {
+        if ((_state.value as? LinkState.Remote)?.reconnecting == true) retryNow.trySend(Unit)
+    }
+
+    /** [conn] is gone or the screen stopped answering: reconnect, or continue here if that fails. */
+    private fun onLinkLost(conn: SenderConnection, why: String) {
+        val remote = _state.value as? LinkState.Remote ?: return
+        if (connection !== conn || remote.reconnecting) return
+        log("lost ${remote.receiverName}: $why")
+        watchers?.cancel()
+        watchers = null
+        conn.close()
+        connection = null
+        val target = target
+        val media = handedOff
+        if (reconnectWindowMs <= 0 || target == null || media == null) return giveUp(remote)
+
+        _state.value = remote.copy(reconnecting = true)
+        retryNow.tryReceive() // a stale "Wi-Fi is back" from before this drop
+        reconnect = scope.launch {
+            val deadline = clock() + reconnectWindowMs
+            var attempt = 0
+            while (clock() < deadline) {
+                attempt++
+                val position = estimatedPosition(remote)
+                val back = try {
+                    rejoin(target, media, position, remote.playing)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    log("reconnect attempt $attempt to ${target.name} failed: ${e.message}")
+                    null
+                }
+                if (back != null) {
+                    connection = back
+                    lastStateAt = clock()
+                    log("reconnected to ${target.name} after $attempt attempt(s), re-handed off at $position ms")
+                    _state.value = remote.copy(positionMs = position, reconnecting = false)
+                    _notices.tryEmit("Reconnected to ${target.name}.")
+                    watch(back, target.name)
+                    return@launch
+                }
+                withTimeoutOrNull(reconnectRetryMs) { retryNow.receive() }
+            }
+            giveUp(_state.value as? LinkState.Remote ?: return@launch)
+        }
+    }
+
+    /** Connect, hello and hand off the same media again; the screen re-attaches. Null if it refuses. */
+    private suspend fun rejoin(target: Target, media: MediaInfo, positionMs: Long, playing: Boolean): SenderConnection? {
+        val token = trust.get(target.id) ?: return null
+        val conn = connect(target.webSocketUrl)
+        val ok = try {
+            withTimeout(REJOIN_TIMEOUT_MS) { conn.hello(token).accepted && conn.handoff(media, positionMs, playing).accepted }
+        } catch (e: Exception) {
+            conn.close()
+            throw e
+        }
+        if (ok) return conn
+        conn.close()
+        return null
+    }
+
+    private fun giveUp(remote: LinkState.Remote) {
+        log("continuing locally; ${remote.receiverName} is gone")
         _notices.tryEmit("Lost the connection to ${remote.receiverName}. Continuing here.")
         finishRemote(estimatedPosition(remote), remote.playing)
     }
@@ -200,20 +336,24 @@ class HandoffCoordinator(
                 } catch (e: Exception) {
                     // Never leave the phone showing a remote that nothing updates any more.
                     log("state handling failed: $e")
-                    if (connection === conn) onConnectionLost()
+                    onLinkLost(conn, "state handling failed")
                 }
+            }
+            launch {
+                // The latest state, not the event stream: the first one can arrive before we listen.
+                val first = conn.lastState.first { it != null && it.playing && !it.buffering && !it.ended }!!
+                shown("screen shows frames at ${first.positionMs} ms")
             }
             launch {
                 conn.closed.first { it }
                 log("connection to $receiverName closed")
-                if (_state.value is LinkState.Remote && connection === conn) onConnectionLost()
+                onLinkLost(conn, "connection closed")
             }
             launch {
                 while (_state.value is LinkState.Remote && connection === conn) {
                     delay(stateTimeoutMs / 4)
                     if (_state.value is LinkState.Remote && connection === conn && clock() - lastStateAt > stateTimeoutMs) {
-                        log("no state from $receiverName for ${clock() - lastStateAt} ms")
-                        onConnectionLost()
+                        onLinkLost(conn, "no state for ${clock() - lastStateAt} ms")
                     }
                 }
             }
@@ -232,6 +372,15 @@ class HandoffCoordinator(
         }
     }
 
+    /** The screen took over the picture: the phone stops playing. */
+    private fun shown(why: String) {
+        val remote = _state.value as? LinkState.Remote ?: return
+        if (!remote.starting) return
+        local.pause()
+        _state.value = remote.copy(starting = false)
+        log("phone paused: $why")
+    }
+
     private fun estimatedPosition(remote: LinkState.Remote): Long {
         val drift = if (remote.playing) clock() - lastStateAt else 0
         val estimate = remote.positionMs + drift
@@ -246,8 +395,12 @@ class HandoffCoordinator(
     }
 
     private fun finishRemote(positionMs: Long, play: Boolean) {
+        reconnect?.cancel()
+        reconnect = null
         watchers?.cancel()
         watchers = null
+        target = null
+        handedOff = null
         connection?.close()
         connection = null
         publisher.endSession()
@@ -267,13 +420,18 @@ class HandoffCoordinator(
     private companion object {
         /** Within this of the end counts as finished. */
         const val END_SLACK_MS = 500L
+
+        /** One reconnect attempt: hello and handoff answered within this. */
+        const val REJOIN_TIMEOUT_MS = 5_000L
     }
 
     private fun refusal(name: String, reason: ErrorCode?) = when (reason) {
         ErrorCode.BUSY -> "$name is busy with another phone."
-        ErrorCode.UNSUPPORTED_MEDIA -> "$name can't play this file."
+        ErrorCode.UNSUPPORTED_MEDIA -> "$name can't play this file. Try another video or photo."
         ErrorCode.VERSION_MISMATCH -> "$name needs a different SwipeTo version."
         ErrorCode.NOT_PAIRED -> "$name doesn't recognise this phone. Pair again."
         else -> "$name said no."
     }
+
+    private fun SharedMedia.info(url: String) = MediaInfo(kind, url, file.mime, title, durationMs)
 }

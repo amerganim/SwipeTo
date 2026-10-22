@@ -48,6 +48,12 @@ class StandbyLinks(
         return pending.await()?.takeIf { it.isReady() }
     }
 
+    /** The open, greeted link to [id] if there is one right now; never connects. */
+    suspend fun ready(id: String): SenderConnection? = mutex.withLock { links[id] }
+        ?.takeIf { it.isCompleted && !it.isCancelled }
+        ?.let { runCatching { it.getCompleted() }.getOrNull() }
+        ?.takeIf { it.isReady() }
+
     /** Hands the connection over (to the handoff coordinator); standby forgets it. */
     suspend fun take(id: String): SenderConnection? = mutex.withLock { links.remove(id) }?.await()?.takeIf { it.isReady() }
 

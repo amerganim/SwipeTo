@@ -12,6 +12,7 @@ object MessageTypes {
     const val AIM_START = "aim_start"
     const val AIM_END = "aim_end"
     const val AIM_ACK = "aim_ack"
+    const val PREPARE = "prepare"
     const val HANDOFF = "handoff"
     const val HANDOFF_ACK = "handoff_ack"
     const val CONTROL = "control"
@@ -23,7 +24,7 @@ object MessageTypes {
     const val ERROR = "error"
 
     val ALL = listOf(
-        PAIR_REQUEST, PAIR_CONFIRM, PAIR_RESULT, HELLO, HELLO_ACK, AIM_START, AIM_END, AIM_ACK, HANDOFF,
+        PAIR_REQUEST, PAIR_CONFIRM, PAIR_RESULT, HELLO, HELLO_ACK, AIM_START, AIM_END, AIM_ACK, PREPARE, HANDOFF,
         HANDOFF_ACK, CONTROL, STATE, PULLBACK_REQUEST, PULLBACK, PING, PONG, ERROR,
     )
 }
@@ -108,9 +109,13 @@ data class HelloAck(
     override val type get() = MessageTypes.HELLO_ACK
 }
 
-/** With [nonce]: the marker nonce the phone's camera read, asking the receiver to confirm the lock. */
+/**
+ * With [nonce]: the marker nonce the phone's camera read, asking the receiver to confirm the lock.
+ * With [prefetch]: what is about to be handed off, so the receiver can start loading it.
+ */
 data class AimStart(
     val nonce: String? = null,
+    val prefetch: Prefetch? = null,
     override val id: String = newMessageId(),
     override val ts: Long = nowMs(),
     override val replyTo: String? = null,
@@ -136,6 +141,20 @@ data class AimEnd(
     override val type get() = MessageTypes.AIM_END
 }
 
+/** A hint to open [media] at [positionMs] before the `handoff` arrives. */
+data class Prefetch(val media: MediaInfo, val positionMs: Long)
+
+/** While the user watches: open [media] hidden and muted, in step with [positionMs]. */
+data class Prepare(
+    val media: MediaInfo,
+    val positionMs: Long,
+    override val id: String = newMessageId(),
+    override val ts: Long = nowMs(),
+    override val replyTo: String? = null,
+) : Message() {
+    override val type get() = MessageTypes.PREPARE
+}
+
 data class MediaInfo(
     val kind: MediaKind,
     val url: String,
@@ -144,10 +163,12 @@ data class MediaInfo(
     val durationMs: Long? = null,
 )
 
+/** [transition]: the media follows on from what is showing (album navigation). */
 data class Handoff(
     val media: MediaInfo,
     val positionMs: Long,
     val playing: Boolean,
+    val transition: Transition? = null,
     override val id: String = newMessageId(),
     override val ts: Long = nowMs(),
     override val replyTo: String? = null,
@@ -176,11 +197,12 @@ data class Control(
     override val type get() = MessageTypes.CONTROL
 }
 
-/** The `state` message: receiver playback state. */
+/** The `state` message: receiver playback state. [playing] is the intent; [buffering] says no frames are showing yet. */
 data class PlaybackState(
     val positionMs: Long,
     val playing: Boolean,
     val ended: Boolean,
+    val buffering: Boolean = false,
     override val id: String = newMessageId(),
     override val ts: Long = nowMs(),
     override val replyTo: String? = null,

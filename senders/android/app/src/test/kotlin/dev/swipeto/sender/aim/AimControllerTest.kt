@@ -1,6 +1,9 @@
 package dev.swipeto.sender.aim
 
+import dev.swipeto.protocol.AimStart
 import dev.swipeto.protocol.Hello
+import dev.swipeto.protocol.MediaInfo
+import dev.swipeto.protocol.Prefetch
 import dev.swipeto.protocol.MediaKind
 import dev.swipeto.sender.data.TrustTokens
 import dev.swipeto.sender.handoff.HandoffCoordinator
@@ -68,6 +71,50 @@ class AimControllerTest {
 
     private suspend fun AimController.settled(): AimState = withTimeout(5_000) {
         state.first { it is AimState.Targeted || it is AimState.NoScreens }
+    }
+
+    @Test
+    fun `the target gets a prefetch of what a swipe would send, a screen that only glows does not`() = runBlocking<Unit> {
+        val clip = MediaInfo(MediaKind.VIDEO, "http://phone/m/s/clip", "video/mp4", "Clip", 180_000)
+        var ended = 0
+        val aim = AimController(
+            scope, links, { listOf(AimOption(deskTarget, null, Facing.TOWARD), AimOption(tvTarget, null, Facing.UNKNOWN)) },
+            preferred = camera, graceMs = 300,
+            prefetch = { target -> Prefetch(clip, if (target.id == deskTarget.id) 42_000 else 1) },
+            onEnded = { ended++ },
+        )
+
+        aim.onAimStart()
+        assertEquals("Desk", (aim.settled() as AimState.Targeted).target.name)
+
+        val prefetch = withTimeout(5_000) {
+            var found: Prefetch? = null
+            while (found == null) {
+                found = desk.received.filterIsInstance<AimStart>().firstNotNullOfOrNull { it.prefetch }
+                delay(20)
+            }
+            found
+        }
+        assertEquals(42_000, prefetch.positionMs)
+        assertEquals(clip.url, prefetch.media.url)
+        assertTrue(tv.received.filterIsInstance<AimStart>().none { it.prefetch != null })
+
+        aim.onAimEnd()
+        withTimeout(2_000) { aim.state.first { it is AimState.Idle } }
+        assertEquals(1, ended) // the caller withdraws what it published for the prefetch
+    }
+
+    @Test
+    fun `a swipe taking the target does not count as an ended aim`() = runBlocking<Unit> {
+        var ended = 0
+        val aim = AimController(scope, links, { listOf(AimOption(deskTarget, null, Facing.TOWARD)) }, preferred = camera, onEnded = { ended++ })
+
+        aim.onAimStart()
+        aim.settled()
+        val (_, conn) = aim.takeTarget()!!
+        conn.close()
+
+        assertEquals(0, ended)
     }
 
     @Test

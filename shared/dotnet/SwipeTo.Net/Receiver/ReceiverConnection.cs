@@ -19,6 +19,7 @@ internal sealed class ReceiverConnection
     private string? _pairingSenderName;
     private string? _senderName;
     private CancellationTokenSource? _aimTimeout;
+    private CancellationTokenSource? _prepared;
     private CancellationTokenSource? _markerRotation;
     private bool _aimLocked;
     private CancellationTokenSource? _stateTicker;
@@ -62,6 +63,7 @@ internal sealed class ReceiverConnection
         Hello m => OnHelloAsync(m),
         AimStart m => OnAimStartAsync(m),
         AimEnd => OnAimEndAsync(),
+        Prepare m => OnPrepareAsync(m),
         Handoff m => OnHandoffAsync(m),
         Control m => OnControlAsync(m),
         PullbackRequest m => OnPullbackAsync(m),
@@ -138,14 +140,56 @@ internal sealed class ReceiverConnection
             await _channel.SendAsync(new AimAck(locked) { ReplyTo = aim.Id });
         }
 
+        if (aim.Prefetch is { } prefetch && _host.Playback.CanPlay(prefetch.Media))
+        {
+            // Start loading what is about to be handed off (no-op if this URL is already prefetched).
+            _host.Playback.Prefetch(prefetch.Media, prefetch.PositionMs);
+        }
+
         _host.Ui.ShowAim(_host.Markers.Payload(_options.ReceiverId), _aimLocked);
         StartMarkerRotation();
         _aimTimeout?.Cancel();
         var timeout = _aimTimeout = new CancellationTokenSource();
         _ = Task.Delay(_options.AimTimeout, timeout.Token).ContinueWith(t =>
         {
-            if (!t.IsCanceled) HideAim();
+            if (t.IsCanceled) return;
+            HideAim();
+            DiscardPrefetchUnlessPrepared();
         }, TaskScheduler.Default);
+    }
+
+    /// <summary>
+    /// The phone is watching this and may hand it to us: load it hidden and muted, in step with it, so a
+    /// later handoff starts at once. Nothing shows. Dropped if the repeats stop.
+    /// </summary>
+    private Task OnPrepareAsync(Prepare prepare)
+    {
+        if (prepare.Media.Kind != MediaKind.Video || !_host.Playback.CanPlay(prepare.Media)) return Task.CompletedTask;
+        if (_prepared is null) _log.LogInformation("Preparing {Title} at {Position} ms", prepare.Media.Title, prepare.PositionMs);
+        _host.Playback.Prefetch(prepare.Media, prepare.PositionMs);
+
+        _prepared?.Cancel();
+        var expiry = _prepared = new CancellationTokenSource();
+        _ = Task.Delay(_options.PrepareTimeout, expiry.Token).ContinueWith(t =>
+        {
+            if (t.IsCanceled) return;
+            _prepared = null;
+            _host.Playback.DiscardPrefetch();
+            _log.LogInformation("Prepared media dropped: no prepare for {Seconds} s", _options.PrepareTimeout.TotalSeconds);
+        }, TaskScheduler.Default);
+        return Task.CompletedTask;
+    }
+
+    private void StopPreparing()
+    {
+        _prepared?.Cancel();
+        _prepared = null;
+    }
+
+    /// <summary>The aim is over; what the phone is still preparing stays loaded.</summary>
+    private void DiscardPrefetchUnlessPrepared()
+    {
+        if (_prepared is null) _host.Playback.DiscardPrefetch();
     }
 
     /// <summary>A new marker nonce every rotation while the marker is up, so a photo of it goes stale.</summary>
@@ -167,11 +211,13 @@ internal sealed class ReceiverConnection
     private Task OnAimEndAsync()
     {
         HideAim();
+        DiscardPrefetchUnlessPrepared();
         return Task.CompletedTask;
     }
 
     private async Task OnHandoffAsync(Handoff handoff)
     {
+        StopPreparing(); // a handoff takes what was prepared (or replaces it)
         HideAim();
         if (!_host.Playback.CanPlay(handoff.Media))
         {
@@ -187,11 +233,26 @@ internal sealed class ReceiverConnection
         StopStateTicker();
         _host.Playback.Changed -= OnPlaybackChanged;
         await _channel.SendAsync(new HandoffAck(true) { ReplyTo = handoff.Id });
-        _log.LogInformation("Handoff of {Kind} at {Position} ms", handoff.Media.Kind, handoff.PositionMs);
+
+        var playback = _host.Playback;
+        var now = playback.Snapshot;
+        if (playback.CurrentUrl == handoff.Media.Url && !now.Ended)
+        {
+            // Same media again (a phone that reconnected): carry on from where the viewer is, no reload,
+            // no seek; the phone's position is only its estimate (docs/protocol.md, 5.4).
+            if (handoff.Playing) playback.Play(); else playback.Pause();
+            _log.LogInformation("Re-attached to {Kind} already playing at {Position} ms", handoff.Media.Kind, now.PositionMs);
+            playback.Changed += OnPlaybackChanged;
+            await SendStateAsync();
+            StartStateTicker();
+            return;
+        }
+        _log.LogInformation("Handoff of {Kind} at {Position} ms{Transition}", handoff.Media.Kind, handoff.PositionMs,
+            handoff.Transition is { } t ? $" ({t.ToString().ToLowerInvariant()})" : "");
 
         try
         {
-            await _host.Playback.LoadAsync(handoff.Media, handoff.PositionMs, handoff.Playing, CancellationToken.None);
+            await _host.Playback.LoadAsync(handoff.Media, handoff.PositionMs, handoff.Playing, handoff.Transition, CancellationToken.None);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
@@ -242,7 +303,7 @@ internal sealed class ReceiverConnection
         if (_channel.Session.State != SessionState.HandoffActive || !_host.IsActive(this)) return;
         var snapshot = _host.Playback.Snapshot;
         if (snapshot.Ended) DetachPlayback();
-        await TrySendAsync(new PlaybackState(snapshot.PositionMs, snapshot.Playing, snapshot.Ended));
+        await TrySendAsync(new PlaybackState(snapshot.PositionMs, snapshot.Playing, snapshot.Ended, snapshot.Buffering));
     }
 
     private void StartStateTicker()
@@ -305,6 +366,11 @@ internal sealed class ReceiverConnection
         DetachPlayback();
         if (_pairingCode is not null) EndPairing();
         if (_aimTimeout is not null) HideAim();
+        if (_aimTimeout is not null || _prepared is not null)
+        {
+            StopPreparing();
+            _host.Playback.DiscardPrefetch();
+        }
         if (_senderName is not null) _host.OnSenderDisconnected(_senderName);
     }
 }

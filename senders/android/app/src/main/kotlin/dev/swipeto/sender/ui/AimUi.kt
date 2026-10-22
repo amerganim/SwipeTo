@@ -62,18 +62,20 @@ import dev.swipeto.sender.data.AppSettings
 import dev.swipeto.sender.data.EventLog
 
 /**
- * Reports deliberate vertical swipes over this element without taking touches away from what is
- * underneath (the player still gets its taps): it only watches the Initial pass, never consumes.
+ * Reports deliberate swipes over this element without taking touches away from what is underneath
+ * (the player still gets its taps): it only watches the Initial pass, never consumes. Vertical
+ * swipes always; left and right too when [horizontal] (album paging).
  *
  * The gesture loop outlives recompositions, so it calls the *latest* [onSwipe] (found on the A15:
  * holding on to the first one meant every swipe still saw "no video loaded").
  */
-fun Modifier.verticalSwipes(classifier: SwipeClassifier, onSwipe: (Swipe) -> Unit): Modifier = composed {
+fun Modifier.swipes(classifier: SwipeClassifier, horizontal: Boolean = false, onSwipe: (Swipe) -> Unit): Modifier = composed {
     val currentOnSwipe by rememberUpdatedState(onSwipe)
-    swipeGestures(classifier) { currentOnSwipe(it) }
+    val currentHorizontal by rememberUpdatedState(horizontal)
+    swipeGestures(classifier, { currentHorizontal }) { currentOnSwipe(it) }
 }
 
-private fun Modifier.swipeGestures(classifier: SwipeClassifier, onSwipe: (Swipe) -> Unit): Modifier = pointerInput(classifier) {
+private fun Modifier.swipeGestures(classifier: SwipeClassifier, horizontal: () -> Boolean, onSwipe: (Swipe) -> Unit): Modifier = pointerInput(classifier) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
         val tracker = VelocityTracker()
@@ -91,6 +93,7 @@ private fun Modifier.swipeGestures(classifier: SwipeClassifier, onSwipe: (Swipe)
         val dy = (last.position.y - down.position.y) / density
         val duration = last.uptimeMillis - down.uptimeMillis
         val swipe = classifier.classify(dx, dy, duration, velocity.y / density)
+            ?: if (horizontal()) classifier.classifyHorizontal(dx, dy, duration, velocity.x / density) else null
         EventLog.d("drag dx=%.0fdp dy=%.0fdp %dms vy=%.0fdp/s -> %s".format(dx, dy, duration, velocity.y / density, swipe))
         swipe?.let(onSwipe)
     }
@@ -127,6 +130,7 @@ fun SettingsSheet(settings: AppSettings, bottomInset: Dp, onDismiss: () -> Unit)
     val raise by settings.raiseToAim.collectAsStateWithLifecycle()
     val camera by settings.cameraTargeting.collectAsStateWithLifecycle()
     val debug by settings.debugOverlay.collectAsStateWithLifecycle()
+    val prepare by settings.prepareScreen.collectAsStateWithLifecycle()
     // Fully expanded: a half-open sheet would clip the last settings behind the navigation bar.
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         // The app draws edge to edge and the sheet reports no insets of its own, so the caller passes the
@@ -137,6 +141,12 @@ fun SettingsSheet(settings: AppSettings, bottomInset: Dp, onDismiss: () -> Unit)
         ) {
             Text("Settings", style = MaterialTheme.typography.titleLarge)
             SettingSwitch("Raise to aim", "Lift the phone toward a screen, then swipe up to send.", raise, settings::setRaiseToAim)
+            SettingSwitch(
+                "Instant start",
+                "While a video plays, the screen you used last loads it quietly, so a swipe starts it at once. Uses that screen's Wi-Fi.",
+                prepare,
+                settings::setPrepareScreen,
+            )
             Column {
                 Text("Sensitivity", style = MaterialTheme.typography.titleSmall)
                 Text("How easily raising and swiping trigger.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)

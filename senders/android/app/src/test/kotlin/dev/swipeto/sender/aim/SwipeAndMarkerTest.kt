@@ -14,6 +14,15 @@ class SwipeAndMarkerTest {
     }
 
     @Test
+    fun `sideways swipes page an album, with the same rules turned`() {
+        assertEquals(Swipe.LEFT, swipes.classifyHorizontal(dxDp = -180f, dyDp = 12f, durationMs = 180, velocityXDpPerSec = -1_500f))
+        assertEquals(Swipe.RIGHT, swipes.classifyHorizontal(dxDp = 200f, dyDp = -20f, durationMs = 200, velocityXDpPerSec = 1_400f))
+        assertNull(swipes.classifyHorizontal(dxDp = 30f, dyDp = -200f, durationMs = 200, velocityXDpPerSec = 300f), "an upward swipe")
+        assertNull(swipes.classifyHorizontal(dxDp = -200f, dyDp = 0f, durationMs = 1_500, velocityXDpPerSec = -150f), "slow drag")
+        assertNull(swipes.classify(dxDp = -180f, dyDp = 12f, durationMs = 180, velocityYDpPerSec = 0f), "not vertical")
+    }
+
+    @Test
     fun `scrubbing, slow drags, short nudges and leaning swipes are not`() {
         assertNull(swipes.classify(dxDp = 300f, dyDp = -40f, durationMs = 300, velocityYDpPerSec = -200f), "sideways scrub")
         assertNull(swipes.classify(dxDp = 0f, dyDp = -200f, durationMs = 1_500, velocityYDpPerSec = -150f), "slow drag")

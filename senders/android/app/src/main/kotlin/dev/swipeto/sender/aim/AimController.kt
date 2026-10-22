@@ -1,5 +1,6 @@
 package dev.swipeto.sender.aim
 
+import dev.swipeto.protocol.Prefetch
 import dev.swipeto.sender.net.SenderConnection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -40,6 +41,10 @@ sealed interface AimState {
  * - A screen whose direction is **unknown** (never locked yet) glows and shows its marker, but only
  *   the camera can make it the target; that lock teaches its direction.
  *
+ * Once a target is chosen its `aim_start` carries [prefetch] (what a swipe would send, at the
+ * current position), repeated with every heartbeat, so the screen has the video loaded and paused
+ * by the time the swipe arrives (docs/protocol.md, 5.3). Screens that merely glow get no prefetch.
+ *
  * Tuned on a Galaxy A15, where people swipe the moment the screen glows: a single faced screen is
  * targeted immediately (the camera may still upgrade it to verified), a swipe while still choosing
  * takes the best guess, and lowering keeps the target for [graceMs] because the swipe itself tips
@@ -53,6 +58,10 @@ class AimController(
     private val fallback: TargetResolver = FallbackResolver,
     private val graceMs: Long = 1_200,
     private val onLocked: (AimState.Targeted) -> Unit = {},
+    /** What a swipe would hand to [LinkTarget] right now, or null (nothing to prefetch). */
+    private val prefetch: suspend (LinkTarget) -> Prefetch? = { null },
+    /** The aim ended without a swipe taking the target (lowered, timed out, app left). */
+    private val onEnded: () -> Unit = {},
     private val log: (String) -> Unit = {},
 ) {
     private val _state = MutableStateFlow<AimState>(AimState.Idle)
@@ -133,8 +142,10 @@ class AimController(
         job?.cancel()
         glow?.cancel()
         aimed.values.forEach { runCatching { it.aimEnd() } }
+        val wasAiming = aimed.isNotEmpty()
         aimed = emptyMap()
         _state.value = AimState.Idle
+        if (wasAiming) onEnded()
     }
 
     /**
@@ -166,11 +177,21 @@ class AimController(
     private fun target(target: LinkTarget, by: ResolvedBy, verified: Boolean) {
         aimed.filterKeys { it != target.id }.values.forEach { runCatching { it.aimEnd() } }
         aimed = aimed.filterKeys { it == target.id }
-        val firstLock = _state.value !is AimState.Targeted
+        val previous = (_state.value as? AimState.Targeted)?.target?.id
+        val firstLock = previous == null
         val targeted = AimState.Targeted(target, by, verified)
         _state.value = targeted
         log("target ${target.name} by $by, verified=$verified")
         if (firstLock || verified) onLocked(targeted)
+        if (previous != target.id) sendPrefetch(target)
+    }
+
+    private fun sendPrefetch(target: LinkTarget) = scope.launch {
+        val conn = aimed[target.id] ?: return@launch
+        val what = runCatching { prefetch(target) }.getOrNull() ?: return@launch
+        if ((_state.value as? AimState.Targeted)?.target?.id != target.id) return@launch
+        runCatching { conn.aimStart(what) }
+        log("prefetch ${what.media.title} at ${what.positionMs} ms on ${target.name}")
     }
 
     /**
@@ -182,8 +203,15 @@ class AimController(
         glow = scope.launch {
             while (true) {
                 delay(HEARTBEAT_MS)
-                if (_state.value !is AimState.Targeted && _state.value !is AimState.Searching) return@launch
-                aimed.values.forEach { runCatching { it.aimStart() } }
+                val state = _state.value
+                if (state !is AimState.Targeted && state !is AimState.Searching) return@launch
+                if (state is AimState.Targeted) {
+                    // Keep the screen's prefetch at the phone's position (it re-seeks if far off).
+                    val what = runCatching { prefetch(state.target) }.getOrNull()
+                    aimed[state.target.id]?.let { conn -> runCatching { conn.aimStart(what) } }
+                } else {
+                    aimed.values.forEach { runCatching { it.aimStart() } }
+                }
             }
         }
     }

@@ -5,18 +5,33 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.util.concurrent.ConcurrentHashMap
 
-/** Publishes through [LocalMediaServer], using the phone address that routes to the receiver. */
-class ServerPublisher(private val server: LocalMediaServer) : MediaPublisher {
+/**
+ * Publishes through [LocalMediaServer], using the phone address that routes to the receiver. The
+ * same file for the same receiver keeps its URL until [endSession], so a handoff after a prefetch
+ * names exactly what the screen already started loading.
+ */
+class ServerPublisher(
+    private val server: LocalMediaServer,
+    /** Binds the routing probe to the Wi-Fi network (when mobile data is the default, it would pick that address). */
+    private val bind: (DatagramSocket) -> Unit = {},
+) : MediaPublisher {
+    private val published = ConcurrentHashMap<Pair<MediaFile, InetAddress>, String>()
+
     override suspend fun publish(file: MediaFile, receiverHost: InetAddress): String = withContext(Dispatchers.IO) {
-        server.publish(file, localAddressFor(receiverHost))
+        published.getOrPut(file to receiverHost) { server.publish(file, localAddressFor(receiverHost, bind)) }
     }
 
-    override fun endSession() = server.endSession()
+    override fun endSession() {
+        published.clear()
+        server.endSession()
+    }
 
     companion object {
         /** The local address the OS would use to reach [remote]. A UDP "connect" sends no packets. */
-        fun localAddressFor(remote: InetAddress): InetAddress = DatagramSocket().use { probe ->
+        fun localAddressFor(remote: InetAddress, bind: (DatagramSocket) -> Unit = {}): InetAddress = DatagramSocket().use { probe ->
+            bind(probe)
             probe.connect(remote, 9)
             probe.localAddress
         }

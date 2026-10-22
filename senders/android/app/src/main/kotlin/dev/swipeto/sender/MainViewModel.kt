@@ -22,6 +22,9 @@ import dev.swipeto.protocol.Prefetch
 import dev.swipeto.protocol.Prepare
 import dev.swipeto.sender.aim.Preparer
 import dev.swipeto.sender.apps.ActiveMediaWatcher
+import dev.swipeto.sender.apps.ExternalPlayback
+import dev.swipeto.sender.apps.LocalMediaResolver
+import dev.swipeto.sender.apps.SessionSnapshot
 import dev.swipeto.protocol.Transition
 import dev.swipeto.sender.aim.AimConfig
 import dev.swipeto.sender.aim.AimController
@@ -102,7 +105,16 @@ data class AimDebug(
 
 enum class Haptic { TARGET_LOCKED, SENT, BROUGHT_BACK }
 
-/** Owns the phone player, discovery, the media server and the handoff coordinator; survives rotation. */
+/**
+ * What a swipe would send right now and the player it comes from: SwipeTo's own (in front), or
+ * another app's ([app] = its package) found through its media session.
+ */
+data class Source(val item: PickedItem, val playback: LocalPlayback, val app: String? = null)
+
+/**
+ * Owns the phone player, discovery, the media server and the handoff coordinator. One per process
+ * ([SwipeToApp.engine]): SwipeTo's own screen and the background service share it.
+ */
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     val player: ExoPlayer = ExoPlayer.Builder(app).build()
 
@@ -127,6 +139,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val mediaWatcher = ActiveMediaWatcher(app) { EventLog.i(it) }
     private val _mediaAccess = MutableStateFlow(mediaWatcher.hasAccess)
     val mediaAccess: StateFlow<Boolean> = _mediaAccess.asStateFlow()
+    val mediaResolver = LocalMediaResolver(app)
+
+    /** Another app's media, resolved to a file on the phone, while it plays; null otherwise. */
+    private val _external = MutableStateFlow<Source?>(null)
+    val external: StateFlow<Source?> = _external.asStateFlow()
+
+    /** Another app plays something SwipeTo can't tell apart (no title, or no single matching file). */
+    private val _unresolved = MutableStateFlow<SessionSnapshot?>(null)
+    val unresolved: StateFlow<SessionSnapshot?> = _unresolved.asStateFlow()
     private val orientation = OrientationSensor(app)
     private val detector = RaiseToAimDetector()
     val swipes = SwipeClassifier()
@@ -167,17 +188,31 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _receivers = MutableStateFlow<List<ReceiverItem>>(emptyList())
     val receivers: StateFlow<List<ReceiverItem>> = _receivers.asStateFlow()
 
+    /** SwipeTo's own player. */
+    private val inAppPlayback = object : LocalPlayback {
+        override val positionMs get() = player.currentPosition
+        override val isPlaying get() = player.isPlaying || (player.playWhenReady && player.playbackState == ExoPlayer.STATE_BUFFERING)
+        override fun pause() = player.pause()
+        override fun resumeAt(positionMs: Long, play: Boolean) {
+            player.seekTo(positionMs)
+            player.playWhenReady = play
+        }
+    }
+
+    /** The player the current handoff came from; bring-back resumes there. */
+    @Volatile private var handedFrom: LocalPlayback = inAppPlayback
+
+    /** The screen has media that came from another app (the bubble offers bring-back). */
+    val handedFromOtherApp: Boolean get() = handedFrom is ExternalPlayback
+
     private val coordinator = HandoffCoordinator(
         trust = trust,
         publisher = publisher,
         local = object : LocalPlayback {
-            override val positionMs get() = player.currentPosition
-            override val isPlaying get() = player.isPlaying || (player.playWhenReady && player.playbackState == ExoPlayer.STATE_BUFFERING)
-            override fun pause() = player.pause()
-            override fun resumeAt(positionMs: Long, play: Boolean) {
-                player.seekTo(positionMs)
-                player.playWhenReady = play
-            }
+            override val positionMs get() = handedFrom.positionMs
+            override val isPlaying get() = handedFrom.isPlaying
+            override fun pause() = handedFrom.pause()
+            override fun resumeAt(positionMs: Long, play: Boolean) = handedFrom.resumeAt(positionMs, play)
         },
         prompt = PairingPrompt { name, attempt ->
             val request = PairingRequest(name, attempt, CompletableDeferred())
@@ -213,7 +248,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         preferred = CameraMarkerResolver(
             scanner,
             timeoutMs = { AimConfig.forSensitivity(settings.sensitivity.value).markerSearchMs },
-            enabled = { settings.cameraTargeting.value },
+            // Android allows the camera only while SwipeTo is in front; over other apps the compass decides.
+            enabled = { settings.cameraTargeting.value && foreground },
         ),
         fallback = FallbackResolver,
         onLocked = { targeted ->
@@ -235,7 +271,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         links = links,
         target = ::screenToPrepare,
         what = { target ->
-            prefetchFor(target)?.takeIf { player.isPlaying && settings.prepareScreen.value && onUnmeteredWifi() }
+            prefetchFor(target)?.takeIf { source()?.playback?.isPlaying == true && settings.prepareScreen.value && onUnmeteredWifi() }
                 ?.let { Prepare(it.media, it.positionMs) }
         },
         log = { EventLog.i(it) },
@@ -277,6 +313,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         viewModelScope.launch {
+            // Another app plays: find the file, so a swipe can send it (and SwipeTo can pause that app).
+            mediaWatcher.playing.collect { session ->
+                val resolved = session?.let { s -> withContext(Dispatchers.IO) { mediaResolver.resolve(s) }?.let { Source(it, ExternalPlayback(mediaWatcher, s.packageName), s.packageName) } }
+                if (resolved?.item?.uri != _external.value?.item?.uri || resolved?.app != _external.value?.app) {
+                    EventLog.i(
+                        when {
+                            session == null -> "no other app playing"
+                            resolved != null -> "${session.appLabel} plays ${resolved.item.title}: ${resolved.item.uri}"
+                            else -> "${session.appLabel} plays something SwipeTo can't identify (title=${session.title})"
+                        },
+                    )
+                }
+                _external.value = resolved
+                _unresolved.value = session?.takeIf { resolved == null }
+                warmLinks()
+                updateAiming()
+                updatePreparing()
+            }
+        }
+        viewModelScope.launch {
             combine(settings.sensitivity, settings.cameraTargeting) { sensitivity, camera -> sensitivity to camera }.collect { (sensitivity, camera) ->
                 detector.config = AimConfig.forSensitivity(sensitivity)
                 swipes.config = SwipeConfig.forSensitivity(sensitivity)
@@ -297,6 +353,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * What a swipe sends: SwipeTo's own media while it is in front, else what another app plays
+     * (when it could be identified).
+     */
+    fun source(): Source? = if (foreground) _media.value?.let { Source(it, inAppPlayback) } else _external.value
+
+    /** Sensors, links and preparing run while SwipeTo is in front or another app plays something sendable. */
+    private val active: Boolean get() = foreground || _external.value != null
+
     /** From the activity: sensors, camera and standby links run only while the app is in front. */
     fun setForeground(value: Boolean) {
         if (value) {
@@ -309,11 +374,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (value) {
             _needsCameraPermission.value = settings.cameraTargeting.value && !scanner.hasPermission
             warmLinks()
-        } else {
+        } else if (!active) {
             viewModelScope.launch { links.closeAll() }
         }
+        if (!value) startBackgroundService()
         updateAiming()
         updatePreparing()
+    }
+
+    /**
+     * Keeps SwipeTo alive while other apps are in front (Samsung freezes background apps within a
+     * minute, seen on the A15), so it can follow what they play and react to a raise.
+     */
+    private fun startBackgroundService() {
+        if (!mediaWatcher.hasAccess || !settings.otherApps.value) return
+        val context = getApplication<Application>()
+        runCatching { context.startForegroundService(android.content.Intent(context, SwipeToService::class.java)) }
+            .onFailure { EventLog.i("background service not started: $it") }
     }
 
     fun onCameraPermissionResult(granted: Boolean) {
@@ -362,8 +439,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (start) aim.onAimStart() else aim.endNow()
     }
 
+    /** Swipe up on the bubble over another app (or on SwipeTo's own video). */
+    suspend fun swipeUpFromAnywhere(): Boolean = swipeUp()
+
     private suspend fun swipeUp(): Boolean {
-        val picked = _media.value ?: return false
+        val source = source() ?: return false
+        val picked = source.item
         EventLog.i("swipe up while ${aimState.value::class.simpleName}")
         when (aimState.value) {
             is AimState.Targeted -> Unit
@@ -391,7 +472,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             conn.close()
             return false
         }
-        EventLog.i("swipe up: handing off to ${target.name}")
+        EventLog.i("swipe up: handing off ${picked.title} to ${target.name}${source.app?.let { " from $it" } ?: ""}")
+        handedFrom = source.playback
         val sent = coordinator.sendTo(
             Target(receiver.id, receiver.name, receiver.webSocketUrl, receiver.host),
             sharedMedia(picked),
@@ -408,7 +490,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun updateAiming() {
-        val wanted = foreground && settings.raiseToAim.value && link.value is LinkState.Idle && orientation.available
+        val wanted = active && settings.raiseToAim.value && link.value is LinkState.Idle && orientation.available
         if (!wanted) {
             stopAiming()
             return
@@ -426,7 +508,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     AimPhase.AIMING -> {
                         headingAtRaise = sample.headingDeg
                         EventLog.i("raise detected at %.1f°, heading %s".format(sample.elevationDeg, sample.headingDeg?.let { "%.0f°".format(it) } ?: "unknown"))
-                        if (_media.value != null) aim.onAimStart()
+                        if (source() != null) aim.onAimStart()
                     }
                     AimPhase.IDLE -> {
                         EventLog.i("lowered at %.1f°".format(sample.elevationDeg))
@@ -467,7 +549,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         discovery.receivers.value.filter { trust.isPaired(it.id) }.map { LinkTarget(it.id, it.name, it.webSocketUrl) }
 
     private fun warmLinks() {
-        if (!foreground || link.value !is LinkState.Idle || _media.value == null) return
+        if (!active || link.value !is LinkState.Idle || source() == null) return
         viewModelScope.launch { links.warm(pairedTargets()) }
     }
 
@@ -480,11 +562,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** What a swipe toward [target] would send, published for it, at the phone's position. Videos only. */
     private suspend fun prefetchFor(target: LinkTarget): Prefetch? {
-        val item = _media.value?.takeIf { it.kind == MediaKind.VIDEO } ?: return null
+        val source = source()?.takeIf { it.item.kind == MediaKind.VIDEO } ?: return null
+        val item = source.item
         val receiver = discovery.receivers.value.firstOrNull { it.id == target.id } ?: return null
         val shared = sharedMedia(item)
         val url = publisher.publish(shared.file, receiver.host)
-        return Prefetch(MediaInfo(MediaKind.VIDEO, url, shared.file.mime, shared.title, shared.durationMs), player.currentPosition)
+        return Prefetch(MediaInfo(MediaKind.VIDEO, url, shared.file.mime, shared.title, shared.durationMs), source.playback.positionMs)
     }
 
     fun onMediaPicked(uris: List<Uri>) = viewModelScope.launch {
@@ -544,6 +627,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         // A standby link to this screen would refuse a second hello; use it instead of a new connection.
         val ready = links.take(receiver.id)
+        handedFrom = inAppPlayback
         val sent = coordinator.sendTo(Target(receiver.id, receiver.name, receiver.webSocketUrl, receiver.host), sharedMedia(picked), ready)
         if (sent) {
             trust.markUsed(receiver.id)
@@ -582,7 +666,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Preparing runs while the app is in front and the phone has the media; each tick checks the rest. */
     private fun updatePreparing() {
-        if (foreground && link.value is LinkState.Idle) {
+        if (active && link.value is LinkState.Idle) {
             preparer.start()
         } else {
             val wasPreparing = preparer.active

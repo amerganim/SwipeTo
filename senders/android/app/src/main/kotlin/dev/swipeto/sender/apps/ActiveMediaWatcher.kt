@@ -66,6 +66,14 @@ class ActiveMediaWatcher(private val context: Context, private val log: (String)
     private val _sessions = MutableStateFlow<List<SessionSnapshot>>(emptyList())
     val sessions: StateFlow<List<SessionSnapshot>> = _sessions.asStateFlow()
 
+    /** The session of another app that is playing right now (the most recently changed), or null. */
+    private val _playing = MutableStateFlow<SessionSnapshot?>(null)
+    val playing: StateFlow<SessionSnapshot?> = _playing.asStateFlow()
+
+    fun session(packageName: String): SessionSnapshot? = _sessions.value.firstOrNull { it.packageName == packageName }
+
+    fun controller(packageName: String): MediaController? = controllers.firstOrNull { it.first.packageName == packageName }?.first
+
     val hasAccess: Boolean
         get() = Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners")
             ?.split(':')?.any { ComponentName.unflattenFromString(it) == component } == true
@@ -91,6 +99,7 @@ class ActiveMediaWatcher(private val context: Context, private val log: (String)
         detachAll()
         watching = false
         _sessions.value = emptyList()
+        _playing.value = null
     }
 
     private fun attach(list: List<MediaController>) {
@@ -115,7 +124,10 @@ class ActiveMediaWatcher(private val context: Context, private val log: (String)
 
     private fun refresh() {
         val snapshots = controllers.map { (controller, _) -> snapshot(controller) }
+            .filter { it.packageName != context.packageName }
         _sessions.value = snapshots
+        // Android lists sessions most recently active first.
+        _playing.value = snapshots.firstOrNull { it.playing }
         for (s in snapshots) {
             // Log what an app exposes whenever it changes (not every position tick), for reading over adb.
             val key = "${s.state} ${s.title} ${s.mediaId} ${s.metadata} ${s.details}"

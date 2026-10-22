@@ -173,7 +173,7 @@ fun SwipeToScreen(viewModel: MainViewModel) {
     val navBar = with(LocalDensity.current) { WindowInsets.navigationBars.getBottom(this).toDp() }
     if (showSettings) {
         SettingsSheet(viewModel.settings, bottomInset = navBar, onDismiss = { showSettings = false }) {
-            OtherAppsSection(viewModel.mediaAccess, viewModel.mediaWatcher.sessions, showFields = debugOn)
+            OtherAppsSection(viewModel, showFields = debugOn)
         }
     }
 }

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://swipeto.dev/schemas/v1/aim_start.schema.json",
   "title": "aim_start",
-  "description": "Phone is raised toward this receiver (glow + marker). With nonce: the marker nonce its camera read; the receiver answers aim_ack.",
+  "description": "Phone is raised toward this receiver (glow + marker). Optional nonce (camera read, answered by aim_ack) and prefetch (start loading what is about to be handed off).",
   "type": "object",
   "allOf": [
     {
@@ -15,6 +15,22 @@
     },
     "nonce": {
       "$ref": "common.schema.json#/$defs/markerNonce"
+    },
+    "prefetch": {
+      "type": "object",
+      "properties": {
+        "media": {
+          "$ref": "common.schema.json#/$defs/media"
+        },
+        "positionMs": {
+          "$ref": "common.schema.json#/$defs/positionMs"
+        }
+      },
+      "required": [
+        "media",
+        "positionMs"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [

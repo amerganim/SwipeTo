@@ -1,0 +1,13 @@
+{
+  "type": "prepare",
+  "id": "3f2b8c1e-9a4d-4e6f-8b2a-1c3d5e7f9a0b",
+  "ts": 1761091200000,
+  "media": {
+    "kind": 1,
+    "url": "http://192.168.1.23:8765/m/Xk3v9QpL2sT8rW1yZ6nB/f1",
+    "mime": "video/mp4",
+    "title": "Beach day",
+    "durationMs": 184000
+  },
+  "positionMs": 462000
+}

@@ -15,6 +15,7 @@
         "aim_start",
         "aim_end",
         "aim_ack",
+        "prepare",
         "handoff",
         "handoff_ack",
         "control",
@@ -125,6 +126,18 @@
       },
       "then": {
         "$ref": "aim_ack.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "prepare"
+          }
+        }
+      },
+      "then": {
+        "$ref": "prepare.schema.json"
       }
     },
     {

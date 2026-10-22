@@ -52,7 +52,7 @@ class ProtocolSession(val localRole: Role) {
                 Role.SENDER -> when (state) {
                     SessionState.CONNECTED, SessionState.PAIRED -> message is PairRequest || message is Hello
                     SessionState.PAIRING -> message is PairRequest || message is PairConfirm
-                    SessionState.SESSION -> message is AimStart || message is AimEnd || message is Handoff
+                    SessionState.SESSION -> message is AimStart || message is AimEnd || message is Prepare || message is Handoff
                     SessionState.HANDOFF_ACTIVE -> message is AimStart || message is AimEnd || message is Handoff ||
                         message is Control || message is PullbackRequest
                 }
@@ -66,6 +66,6 @@ class ProtocolSession(val localRole: Role) {
         }
 
         private fun needsSession(message: Message) =
-            message is AimStart || message is AimEnd || message is Handoff || message is Control || message is PullbackRequest
+            message is AimStart || message is AimEnd || message is Prepare || message is Handoff || message is Control || message is PullbackRequest
     }
 }

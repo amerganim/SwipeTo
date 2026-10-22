@@ -16,6 +16,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,6 +27,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import java.net.InetAddress
 
 /** The phone's own player, as far as handoff needs it. */
@@ -104,6 +106,7 @@ class HandoffCoordinator(
     private var connection: SenderConnection? = null
     private var watchers: Job? = null
     private var reconnect: Job? = null
+    private val retryNow = Channel<Unit>(Channel.CONFLATED)
     private var lastStateAt = 0L
 
     /** Where the media is and what it is, for reconnecting and album paging. */
@@ -218,6 +221,11 @@ class HandoffCoordinator(
         connection?.let { onLinkLost(it, "the phone's Wi-Fi went away") }
     }
 
+    /** Wi-Fi is back: a reconnect in progress tries again now instead of after its pause. */
+    fun onNetworkAvailable() {
+        if ((_state.value as? LinkState.Remote)?.reconnecting == true) retryNow.trySend(Unit)
+    }
+
     /** [conn] is gone or the screen stopped answering: reconnect, or continue here if that fails. */
     private fun onLinkLost(conn: SenderConnection, why: String) {
         val remote = _state.value as? LinkState.Remote ?: return
@@ -232,6 +240,7 @@ class HandoffCoordinator(
         if (reconnectWindowMs <= 0 || target == null || media == null) return giveUp(remote)
 
         _state.value = remote.copy(reconnecting = true)
+        retryNow.tryReceive() // a stale "Wi-Fi is back" from before this drop
         reconnect = scope.launch {
             val deadline = clock() + reconnectWindowMs
             var attempt = 0
@@ -255,7 +264,7 @@ class HandoffCoordinator(
                     watch(back, target.name)
                     return@launch
                 }
-                delay(reconnectRetryMs)
+                withTimeoutOrNull(reconnectRetryMs) { retryNow.receive() }
             }
             giveUp(_state.value as? LinkState.Remote ?: return@launch)
         }

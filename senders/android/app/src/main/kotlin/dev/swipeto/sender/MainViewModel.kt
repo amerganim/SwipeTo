@@ -52,7 +52,9 @@ import dev.swipeto.sender.handoff.Target
 import dev.swipeto.sender.media.ContentMediaFile
 import dev.swipeto.sender.media.LocalMediaServer
 import dev.swipeto.sender.media.ServerPublisher
+import dev.swipeto.sender.net.ReceiverException
 import dev.swipeto.sender.net.SenderConnection
+import okhttp3.OkHttpClient
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -104,7 +106,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val trust = TrustStore(app)
     private val discovery = ReceiverDiscovery(app)
     private val server = LocalMediaServer()
-    private val publisher = ServerPublisher(server)
+    private val publisher = ServerPublisher(server) { socket -> wifi?.bindSocket(socket) }
+
+    /**
+     * The Wi-Fi network, once seen. Screens are reached over it even while Android routes the rest
+     * through mobile data (Wi-Fi without internet, or just back and not validated yet): found on the
+     * A15, where reconnects after a Wi-Fi blip went out over mobile data and never reached the PC.
+     */
+    @Volatile private var wifi: Network? = null
+    @Volatile private var wifiSeen = false
+    private var wifiClient: Pair<Network, OkHttpClient>? = null
     private val files = mutableMapOf<Uri, ContentMediaFile>()
     private val connectivity = app.getSystemService(ConnectivityManager::class.java)
     val settings = AppSettings(app)
@@ -170,7 +181,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         },
         scope = viewModelScope,
-        connect = { url -> SenderConnection.connect(url, trust.identity, log = { EventLog.i(it) }) },
+        connect = ::connectToScreen,
         log = { EventLog.i(it) },
     )
 
@@ -180,7 +191,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val links = StandbyLinks(
         scope = viewModelScope,
         trust = trust,
-        connect = { url -> SenderConnection.connect(url, trust.identity, log = { EventLog.i(it) }) },
+        connect = ::connectToScreen,
         log = { EventLog.i(it) },
     )
 
@@ -215,6 +226,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         override fun onLost(network: Network) {
             if (network == current) current = null
+            if (network == wifi) wifi = null
             // The screen keeps playing; the coordinator reconnects once Wi-Fi is back (or takes it back here).
             viewModelScope.launch { coordinator.onNetworkLost() }
         }
@@ -224,6 +236,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // just the network we started on.)
             val changed = current != null && current != network
             current = network
+            wifi = network
+            wifiSeen = true
+            EventLog.i("Wi-Fi available")
+            coordinator.onNetworkAvailable()
             if (changed) viewModelScope.launch(Dispatchers.Default) { discovery.restart() }
         }
     }
@@ -524,6 +540,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun bringBack() = viewModelScope.launch {
         coordinator.bringBack()
         _haptics.tryEmit(Haptic.BROUGHT_BACK)
+    }
+
+    /** A WebSocket to a screen, over the Wi-Fi network; fails at once while Wi-Fi is off. */
+    private suspend fun connectToScreen(url: String): SenderConnection {
+        val network = wifi
+        if (network == null && wifiSeen) throw ReceiverException("This phone is not on Wi-Fi")
+        val client = network?.let { net ->
+            wifiClient?.takeIf { it.first == net }?.second
+                ?: SenderConnection.defaultClient.newBuilder().socketFactory(net.socketFactory).build().also { wifiClient = net to it }
+        } ?: SenderConnection.defaultClient
+        return SenderConnection.connect(url, trust.identity, client, log = { EventLog.i(it) })
     }
 
     private fun onLocalNetwork(): Boolean {

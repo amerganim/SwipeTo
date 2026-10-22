@@ -176,6 +176,31 @@ class HandoffCoordinatorTest {
     }
 
     @Test
+    fun `Wi-Fi coming back retries the reconnect at once`() = runBlocking {
+        var offline = false
+        val resilient = HandoffCoordinator(
+            trust = trust, publisher = publisher, local = local, prompt = PairingPrompt { _, _ -> codes.removeFirstOrNull() }, scope = scope,
+            connect = { url ->
+                if (offline) throw java.io.IOException("no Wi-Fi")
+                SenderConnection.connect(url, SenderIdentity("a1b2c3d4-e5f6-4789-8abc-def012345678", "Phone"))
+            },
+            stateTimeoutMs = 60_000, reconnectWindowMs = 60_000, reconnectRetryMs = 60_000,
+        )
+        assertTrue(resilient.sendTo(target, media))
+        withTimeout(5_000) { resilient.state.first { it is LinkState.Remote && it.playing } }
+        offline = true
+        resilient.onNetworkLost()
+        withTimeout(5_000) { resilient.state.first { it is LinkState.Remote && it.reconnecting } }
+        delay(300) // the first attempt failed; the next would be a minute away
+
+        offline = false
+        resilient.onNetworkAvailable()
+
+        withTimeout(3_000) { resilient.state.first { it is LinkState.Remote && !it.reconnecting } }
+        assertEquals(2, receiver.handoffs.size)
+    }
+
+    @Test
     fun `a screen that never comes back hands the video back to the phone after the reconnect window`() = runBlocking {
         val resilient = newCoordinator(reconnectWindowMs = 1_000)
         assertTrue(resilient.sendTo(target, media))

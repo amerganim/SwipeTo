@@ -40,6 +40,12 @@ class ForegroundApp(private val context: Context) {
     companion object {
         private const val LOOKBACK_MS = 10 * 60_000L
 
+        /** Browsers: what they show is named only by a share (Share → Laptop). */
+        val BROWSERS = setOf(
+            "com.android.chrome", "com.sec.android.app.sbrowser", "org.mozilla.firefox", "com.microsoft.emmx",
+            "com.opera.browser", "com.brave.browser", "com.duckduckgo.mobile.android",
+        )
+
         /** Apps where you look at the phone's own photos and videos. */
         val GALLERIES = setOf("com.sec.android.gallery3d", "com.google.android.apps.photos", "com.android.gallery3d", "com.samsung.android.video")
     }

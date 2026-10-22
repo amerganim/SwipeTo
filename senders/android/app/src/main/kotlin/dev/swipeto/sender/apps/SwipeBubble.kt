@@ -71,7 +71,7 @@ class SwipeBubble(
         if (root == null) create()
         val (text, accent) = when (next) {
             is BubbleState.Aiming -> (next.screen?.let { "↑  Swipe up to send to $it" } ?: "Looking for the screen…") to next.locked
-            is BubbleState.Pick -> "Tap one to send to ${next.screen}" to true
+            is BubbleState.Pick -> "Tap one to send to ${next.screen}  ·  the one you're viewing: Share → ${next.screen}" to true
             is BubbleState.Hint -> next.text to false
             is BubbleState.OnScreen -> (if (next.album) "On ${next.screen}  ·  ← → more  ·  ↓ bring back" else "On ${next.screen}  ·  swipe down to bring back") to false
             BubbleState.Hidden -> "" to false

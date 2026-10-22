@@ -82,6 +82,9 @@ import kotlinx.coroutines.flow.first
 
 private const val TAG = "SwipeTo"
 
+/** Share-sheet category of the per-screen direct-share targets (res/xml/shortcuts.xml). */
+private const val SHARE_CATEGORY = "dev.swipeto.sender.category.SCREEN"
+
 /** How long a share waits for the screen used last to be discovered (SwipeTo may have just started). */
 private const val SHARE_DISCOVERY_MS = 4_000L
 
@@ -196,6 +199,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** A gallery app is in front (from the background service): a raise offers the newest photos and videos. */
     private val _galleryOpen = MutableStateFlow(false)
     val galleryOpen: StateFlow<Boolean> = _galleryOpen.asStateFlow()
+
+    /** A browser is in front: a raise explains Share → Laptop (browsers never say which page is open). */
+    private val _browserOpen = MutableStateFlow(false)
+    val browserOpen: StateFlow<Boolean> = _browserOpen.asStateFlow()
 
     /** The screen the phone was last aimed at, for a pick made on the bubble after lowering it. */
     @Volatile private var lastTarget: LinkTarget? = null
@@ -382,6 +389,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             discovery.receivers.collect { list ->
                 _receivers.value = list.map { ReceiverItem(it, trust.isPaired(it.id)) }
+                publishShareTargets(list)
                 warmLinks()
             }
         }
@@ -435,16 +443,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         updatePreparing()
     }
 
-    /** The screen used last, waiting a moment for discovery when SwipeTo has just started (for a share). */
-    private suspend fun screenSoon(): LinkTarget? = screenToPrepare()
-        ?: withTimeoutOrNull(SHARE_DISCOVERY_MS) { discovery.receivers.first { screenToPrepare() != null }; screenToPrepare() }
+    /**
+     * The screen picked in the share sheet ([preferred], a paired screen's id), else the one used
+     * last; waits a moment for discovery when SwipeTo has just started for the share.
+     */
+    private suspend fun screenSoon(preferred: String? = null): LinkTarget? {
+        fun pick() = preferred?.let { id -> pairedTargets().firstOrNull { it.id == id } } ?: screenToPrepare()
+        return pick() ?: withTimeoutOrNull(SHARE_DISCOVERY_MS) { discovery.receivers.first { pick() != null }; pick() }
+    }
+
+    /** Each paired screen as a direct-share target ("Share → Laptop"), kept in step with discovery. */
+    private fun publishShareTargets(screens: List<DiscoveredReceiver>) {
+        val app = getApplication<Application>()
+        screens.filter { trust.isPaired(it.id) }.forEach { screen ->
+            val shortcut = androidx.core.content.pm.ShortcutInfoCompat.Builder(app, screen.id)
+                .setShortLabel(screen.name)
+                .setLongLabel("Send to ${screen.name}")
+                .setIcon(androidx.core.graphics.drawable.IconCompat.createWithResource(app, R.mipmap.ic_launcher))
+                .setIntent(android.content.Intent(android.content.Intent.ACTION_MAIN, null, app, MainActivity::class.java))
+                .setCategories(setOf(SHARE_CATEGORY))
+                .setLongLived(true)
+                .build()
+            runCatching { androidx.core.content.pm.ShortcutManagerCompat.pushDynamicShortcut(app, shortcut) }
+        }
+    }
 
     /**
      * Share → SwipeTo of photos or videos (Gallery...): Gallery never says which photo is open, but a
      * share names exactly that one. One item comes with its neighbours in Gallery's order, so left and
      * right on the screen page on from it; several shared items are the album themselves.
      */
-    suspend fun onMediaShared(uris: List<Uri>): String {
+    suspend fun onMediaShared(uris: List<Uri>, screenId: String? = null): String {
         val (items, index) = withContext(Dispatchers.IO) {
             val single = uris.singleOrNull()?.let(::mediaStoreId)?.let { recentMedia.around(it) }
             single ?: (uris.mapNotNull(::describeShared) to 0)
@@ -458,7 +487,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             sentFromGallery = true
             return if (coordinator.show(sharedMedia(items[index]), Transition.NEXT)) "Showing on ${remote.receiverName}" else "SwipeTo: ${remote.receiverName} didn't take it."
         }
-        val target = screenSoon() ?: run {
+        val target = screenSoon(screenId) ?: run {
             showLocally(Album(items, index), play = false)
             return "SwipeTo: no paired screen nearby. Open SwipeTo to pair one."
         }
@@ -499,13 +528,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * (at the app's position). With no screen around it waits for the next lift and swipe. Returns
      * what to tell the user.
      */
-    suspend fun onLinkShared(sharedLink: SharedLink, subject: String?): String {
+    suspend fun onLinkShared(sharedLink: SharedLink, subject: String?, screenId: String? = null): String {
         val playing = mediaWatcher.playing.value
         shared = Shared(sharedLink, playing?.packageName, playing?.title, subject)
         EventLog.i("shared ${sharedLink.service} link ${sharedLink.url} while ${playing?.appLabel ?: "nothing"} played")
         updateExternal(playing)
         if (link.value !is LinkState.Idle) return "SwipeTo: a screen is already playing. Bring it back first."
-        val target = screenSoon() ?: return "SwipeTo: got it. Lift the phone toward a screen and swipe up to send."
+        val target = screenSoon(screenId) ?: return "SwipeTo: got it. Lift the phone toward a screen and swipe up to send."
         val receiver = discovery.receivers.value.firstOrNull { it.id == target.id } ?: return "SwipeTo: ${target.name} is not reachable."
         val source = _external.value ?: Source(sharedOnly(shared!!), NoPlayback)
         handedFrom = source.playback
@@ -527,7 +556,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val inFront: Boolean get() = foreground
 
     /** Sensors, links and preparing run while SwipeTo is in front, another app plays something sendable, or a gallery is open. */
-    private val active: Boolean get() = foreground || _external.value != null || _galleryOpen.value || shareHint() != null
+    private val active: Boolean get() = foreground || _external.value != null || _galleryOpen.value || _browserOpen.value || shareHint() != null
 
     /** A video app plays something only a share can name: a raise shows how (the bubble's hint). */
     fun shareHint(): SessionSnapshot? = _unresolved.value?.takeIf { _external.value == null && it.packageName in SHAREABLE_APPS }
@@ -535,9 +564,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** From the background service: the app in front changed. */
     fun setForegroundApp(packageName: String?) {
         val gallery = !foreground && packageName in ForegroundApp.GALLERIES
-        if (gallery == _galleryOpen.value) return
+        val browser = !foreground && packageName in ForegroundApp.BROWSERS
+        if (gallery == _galleryOpen.value && browser == _browserOpen.value) return
+        if (gallery != _galleryOpen.value) EventLog.i(if (gallery) "gallery in front: $packageName" else "gallery closed")
+        if (browser != _browserOpen.value) EventLog.i(if (browser) "browser in front: $packageName" else "browser closed")
         _galleryOpen.value = gallery
-        EventLog.i(if (gallery) "gallery in front: $packageName" else "gallery closed")
+        _browserOpen.value = browser
         warmLinks()
         updateAiming()
     }
@@ -752,7 +784,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     AimPhase.AIMING -> {
                         headingAtRaise = sample.headingDeg
                         EventLog.i("raise detected at %.1f°, heading %s".format(sample.elevationDeg, sample.headingDeg?.let { "%.0f°".format(it) } ?: "unknown"))
-                        if (source() != null || _galleryOpen.value || shareHint() != null) aim.onAimStart()
+                        if (source() != null || _galleryOpen.value || _browserOpen.value || shareHint() != null) aim.onAimStart()
                     }
                     AimPhase.IDLE -> {
                         EventLog.i("lowered at %.1f°".format(sample.elevationDeg))
@@ -793,7 +825,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         discovery.receivers.value.filter { trust.isPaired(it.id) }.map { LinkTarget(it.id, it.name, it.webSocketUrl) }
 
     private fun warmLinks() {
-        if (!active || link.value !is LinkState.Idle || (source() == null && !_galleryOpen.value && shareHint() == null)) return
+        if (!active || link.value !is LinkState.Idle || (source() == null && !_galleryOpen.value && !_browserOpen.value && shareHint() == null)) return
         viewModelScope.launch { links.warm(pairedTargets()) }
     }
 

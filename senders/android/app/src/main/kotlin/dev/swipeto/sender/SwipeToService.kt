@@ -64,9 +64,11 @@ class SwipeToService : Service() {
             onSwipe = { swipe ->
                 scope.launch {
                     when {
-                        swipe == Swipe.UP && picking != null -> pick(0)
+                        // Gallery doesn't say which photo is open: never send a guess on swipe-up.
+                        swipe == Swipe.UP && picking != null ->
+                            android.widget.Toast.makeText(this@SwipeToService, "Tap the photo to send, or Share → ${aimName()} to send the one you're viewing.", android.widget.Toast.LENGTH_LONG).show()
                         swipe == Swipe.UP && bubble.showing is BubbleState.Hint ->
-                            android.widget.Toast.makeText(this@SwipeToService, "${engine.shareHint()?.appLabel ?: "This app"} doesn't say what's playing. Tap its Share button, then SwipeTo.", android.widget.Toast.LENGTH_LONG).show()
+                            android.widget.Toast.makeText(this@SwipeToService, "${engine.shareHint()?.appLabel ?: "This app"} doesn't say what it shows. Tap its Share button, then ${aimName()}.", android.widget.Toast.LENGTH_LONG).show()
                         swipe == Swipe.UP -> engine.swipeUpFromAnywhere()
                         swipe == Swipe.DOWN && engine.link.value is LinkState.Remote -> engine.bringBack()
                         swipe == Swipe.LEFT || swipe == Swipe.RIGHT -> engine.onSwipe(swipe)
@@ -100,8 +102,8 @@ class SwipeToService : Service() {
                         BubbleState.OnScreen(link.receiverName, album = album)
                     pickNow != null -> pickNow.second
                     external != null && aim is AimState.Targeted -> BubbleState.Aiming(aim.target.name, aim.verified)
-                    external == null && aim is AimState.Targeted && engine.shareHint() != null ->
-                        BubbleState.Hint(aim.target.name, "To send this to ${aim.target.name}: tap Share, then SwipeTo")
+                    external == null && aim is AimState.Targeted && (engine.shareHint() != null || engine.browserOpen.value) ->
+                        BubbleState.Hint(aim.target.name, "To send this to ${aim.target.name}: tap Share → ${aim.target.name}")
                     external != null && aim is AimState.Searching -> BubbleState.Aiming(null, false)
                     else -> BubbleState.Hidden
                 }
@@ -180,6 +182,8 @@ class SwipeToService : Service() {
         }
         return System.currentTimeMillis() < onScreenUntil
     }
+
+    private fun aimName(): String = (engine.aimState.value as? AimState.Targeted)?.target?.name ?: "SwipeTo"
 
     /** The newest photos and videos on offer over Gallery, and the bubble showing them; null when not picking. */
     private var picking: Pair<List<PickedItem>, BubbleState.Pick>? = null

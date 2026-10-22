@@ -23,7 +23,7 @@ class ShareActivity : Activity() {
         if (media.isNotEmpty()) {
             // A photo or video from Gallery (or any app): send exactly that.
             CoroutineScope(Dispatchers.Main).launch {
-                Toast.makeText(applicationContext, engine.onMediaShared(media), Toast.LENGTH_LONG).show()
+                Toast.makeText(applicationContext, engine.onMediaShared(media, screenId()), Toast.LENGTH_LONG).show()
             }
             finish()
             return
@@ -36,11 +36,14 @@ class ShareActivity : Activity() {
             return
         }
         CoroutineScope(Dispatchers.Main).launch {
-            val message = engine.onLinkShared(link, intent.getStringExtra(Intent.EXTRA_SUBJECT))
+            val message = engine.onLinkShared(link, intent.getStringExtra(Intent.EXTRA_SUBJECT), screenId())
             Toast.makeText(applicationContext, message, Toast.LENGTH_LONG).show()
         }
         finish()
     }
+
+    /** The screen picked in the share sheet's direct-share row ("Laptop"), if one was. */
+    private fun screenId(): String? = intent?.getStringExtra(Intent.EXTRA_SHORTCUT_ID)
 
     /** Photos or videos shared as files (EXTRA_STREAM), one or several. */
     private fun sharedMedia(intent: Intent?): List<Uri> {

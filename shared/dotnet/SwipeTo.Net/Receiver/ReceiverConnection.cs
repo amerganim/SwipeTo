@@ -24,8 +24,6 @@ internal sealed class ReceiverConnection
     private bool _aimLocked;
     private CancellationTokenSource? _stateTicker;
 
-    private const long SameMediaSeekToleranceMs = 1_500;
-
     public ReceiverConnection(ReceiverHost host, WebSocket socket, ILogger log)
     {
         _host = host;
@@ -240,8 +238,8 @@ internal sealed class ReceiverConnection
         var now = playback.Snapshot;
         if (playback.CurrentUrl == handoff.Media.Url && !now.Ended)
         {
-            // Same media again (a phone that reconnected): carry on, don't reload (docs/protocol.md, 5.4).
-            if (Math.Abs(now.PositionMs - handoff.PositionMs) > SameMediaSeekToleranceMs) playback.Seek(handoff.PositionMs);
+            // Same media again (a phone that reconnected): carry on from where the viewer is, no reload,
+            // no seek; the phone's position is only its estimate (docs/protocol.md, 5.4).
             if (handoff.Playing) playback.Play(); else playback.Pause();
             _log.LogInformation("Re-attached to {Kind} already playing at {Position} ms", handoff.Media.Kind, now.PositionMs);
             playback.Changed += OnPlaybackChanged;

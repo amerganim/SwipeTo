@@ -190,7 +190,7 @@ of trust tokens MUST be constant-time.
 
 | Message | Direction | Payload |
 |---|---|---|
-| `aim_start` | S → R | optional `nonce`: a marker nonce the phone's camera read |
+| `aim_start` | S → R | optional `nonce`: a marker nonce the phone's camera read; optional `prefetch` (below) |
 | `aim_ack` | R → S | `locked` (boolean); sent only in reply to an `aim_start` that carries a `nonce` |
 | `aim_end` | S → R | none |
 
@@ -215,6 +215,22 @@ another way).
 A phone may send `aim_start` to several paired receivers at once (every screen
 nearby glows and shows its marker), read one marker, lock that receiver, and
 send `aim_end` to the others.
+
+**Prefetch (instant start).** Once a phone has chosen its target it MAY add
+`prefetch {media, positionMs}` to `aim_start` (`media` exactly as in `handoff`,
+section 5.4): what it is about to hand off and from where. The receiver SHOULD
+start opening that media at that position, paused and unseen, so that the
+`handoff` which follows a swipe plays with no visible delay. It is only a hint:
+
+- the phone MUST still send a `handoff`; a receiver MUST NOT play prefetched
+  media without one;
+- a phone repeating `aim_start` with the same `media.url` and a newer
+  `positionMs` asks the receiver to keep the prefetch near that position;
+- a receiver discards the prefetch on `aim_end`, on a `handoff` of a different
+  `url`, on session end, and after the 10 s aim timeout;
+- the URL is served by the phone exactly as for a `handoff` (same token rules).
+
+A receiver with nothing to gain (or not enough memory) may ignore `prefetch`.
 
 `aim_end` hides glow and marker. A receiver MUST also hide them on `handoff`,
 on session end, and after **10 s** without a new `aim_start`.
@@ -241,7 +257,7 @@ sequenceDiagram
 
 | Message | Direction | Payload |
 |---|---|---|
-| `handoff` | S → R | `media`, `positionMs`, `playing` |
+| `handoff` | S → R | `media`, `positionMs`, `playing`; optional `transition` |
 | `handoff_ack` | R → S | `accepted`; if not accepted, `reason` |
 
 `media`:
@@ -266,10 +282,25 @@ The sender's media `url` has the form
   unknown token or file id — without revealing which part was wrong;
 - MUST stop serving when the session ends.
 
+Optional `transition` ∈ `next`, `previous`: the media follows on from what the
+receiver is showing, in that direction (a photo album, see below). Receivers
+MAY use it to slide the new media in from the matching side; it never changes
+what is played.
+
 Receiver rules: it replies `handoff_ack` **before** media starts loading, with
 `unsupported_media` if it cannot play the `mime`/`kind`. A new `handoff` during
 *HandoffActive* replaces the current media. If the media later fails to load,
 the receiver sends `error {code: "unsupported_media"}` and returns to *Session*.
+
+**Same media again.** A `handoff` whose `media.url` is what the receiver is
+already playing (for example a phone that lost its connection, reconnected and
+handed off again at its best estimate of the position) MUST NOT reload it: the
+receiver seeks only if the position differs by more than about 1.5 s and
+applies `playing`.
+
+**Albums.** Moving through photos on the screen is a sequence of `handoff`s of
+`kind: "image"` during *HandoffActive*, each with `transition` `next` or
+`previous`. The phone owns the album; the receiver only ever shows one item.
 
 ```mermaid
 sequenceDiagram

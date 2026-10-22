@@ -108,9 +108,13 @@ data class HelloAck(
     override val type get() = MessageTypes.HELLO_ACK
 }
 
-/** With [nonce]: the marker nonce the phone's camera read, asking the receiver to confirm the lock. */
+/**
+ * With [nonce]: the marker nonce the phone's camera read, asking the receiver to confirm the lock.
+ * With [prefetch]: what is about to be handed off, so the receiver can start loading it.
+ */
 data class AimStart(
     val nonce: String? = null,
+    val prefetch: Prefetch? = null,
     override val id: String = newMessageId(),
     override val ts: Long = nowMs(),
     override val replyTo: String? = null,
@@ -136,6 +140,9 @@ data class AimEnd(
     override val type get() = MessageTypes.AIM_END
 }
 
+/** A hint to open [media] at [positionMs] before the `handoff` arrives. */
+data class Prefetch(val media: MediaInfo, val positionMs: Long)
+
 data class MediaInfo(
     val kind: MediaKind,
     val url: String,
@@ -144,10 +151,12 @@ data class MediaInfo(
     val durationMs: Long? = null,
 )
 
+/** [transition]: the media follows on from what is showing (album navigation). */
 data class Handoff(
     val media: MediaInfo,
     val positionMs: Long,
     val playing: Boolean,
+    val transition: Transition? = null,
     override val id: String = newMessageId(),
     override val ts: Long = nowMs(),
     override val replyTo: String? = null,

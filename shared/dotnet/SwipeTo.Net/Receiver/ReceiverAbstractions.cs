@@ -13,8 +13,25 @@ public interface IPlaybackTarget
     /// <summary>Whether this receiver can play the kind and MIME type at all (checked before <c>handoff_ack</c>).</summary>
     bool CanPlay(MediaInfo media);
 
-    /// <summary>Opens the media, seeks to <paramref name="positionMs"/>, and plays or stays paused. Throws if it cannot load.</summary>
-    Task LoadAsync(MediaInfo media, long positionMs, bool playing, CancellationToken ct);
+    /// <summary>
+    /// Opens the media, seeks to <paramref name="positionMs"/>, and plays or stays paused. Throws if it
+    /// cannot load. Uses a matching prefetch if there is one. <paramref name="transition"/> says which
+    /// way an album moved, for a slide-in.
+    /// </summary>
+    Task LoadAsync(MediaInfo media, long positionMs, bool playing, Transition? transition, CancellationToken ct);
+
+    /// <summary>The URL being played or shown, or null; a handoff of the same URL re-attaches instead of reloading.</summary>
+    string? CurrentUrl { get; }
+
+    /// <summary>
+    /// Starts opening <paramref name="media"/> at <paramref name="positionMs"/>, paused and unseen, so a
+    /// following <see cref="LoadAsync"/> of the same URL starts at once (docs/protocol.md, 5.3). Calling it
+    /// again for the same URL only moves the position. Best effort: never throws.
+    /// </summary>
+    void Prefetch(MediaInfo media, long positionMs) { }
+
+    /// <summary>Drops a prefetch that will not be used.</summary>
+    void DiscardPrefetch() { }
 
     void Play();
     void Pause();

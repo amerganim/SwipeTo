@@ -23,6 +23,12 @@ public enum MediaKind
     Image,
 }
 
+public enum Transition
+{
+    Next,
+    Previous,
+}
+
 public enum ControlAction
 {
     Play,

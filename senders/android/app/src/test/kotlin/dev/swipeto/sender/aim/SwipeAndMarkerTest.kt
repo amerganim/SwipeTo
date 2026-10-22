@@ -43,6 +43,19 @@ class SwipeAndMarkerTest {
     }
 
     @Test
+    fun `quick swipes that pause before the finger lifts count (A15 acceptance run)`() {
+        // Clear upward swipes whose release velocity was near zero: the finger stopped, then lifted.
+        assertEquals(Swipe.UP, swipes.classify(80f, -134f, 108, 177f))
+        assertEquals(Swipe.UP, swipes.classify(71f, -202f, 141, 110f))
+        assertEquals(Swipe.UP, swipes.classify(89f, -168f, 208, -17f))
+        assertEquals(Swipe.UP, swipes.classify(60f, -148f, 207, 62f))
+        assertEquals(Swipe.UP, swipes.classify(67f, -144f, 132, -174f))
+        assertEquals(Swipe.UP, swipes.classify(41f, -140f, 99, -587f))
+        // But a short one whose finger turned back down at the end still does not.
+        assertNull(swipes.classify(21f, -91f, 142, 674f))
+    }
+
+    @Test
     fun `marker payloads`() {
         assertEquals(
             MarkerPayload("0e1d2c3b-4a59-4687-9a8b-7c6d5e4f3a21", "Qm9vVGhlU2NyZWVu"),

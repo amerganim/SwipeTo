@@ -15,16 +15,20 @@ class SwipeClassifier(var config: SwipeConfig = SwipeConfig()) {
         val c = config
         if (durationMs > c.maxDurationMs) return null
         if (abs(dyDp) < c.minDistanceDp) return null
-        if (abs(velocityYDpPerSec) < c.minVelocityDpPerSec) return null
         // Angle away from the vertical axis: 0 = straight up/down, 90 = sideways (scrubbing).
         val angle = Math.toDegrees(atan2(abs(dxDp).toDouble(), abs(dyDp).toDouble()))
         if (angle > c.maxAngleFromVerticalDeg) return null
         if (hypot(dxDp, dyDp) == 0f) return null
-        // Direction must agree between where the finger went and how it was moving at the end.
-        return when {
-            dyDp < 0 && velocityYDpPerSec < 0 -> Swipe.UP
-            dyDp > 0 && velocityYDpPerSec > 0 -> Swipe.DOWN
-            else -> null
-        }
+
+        // Speed: the faster of the release velocity and the average over the whole swipe. People
+        // often push up firmly and pause a moment before lifting (seen on the A15), which leaves the
+        // release velocity near zero although the swipe was quick and clear.
+        val direction = if (dyDp < 0) -1f else 1f
+        val releaseAlong = velocityYDpPerSec * direction
+        val average = abs(dyDp) / (durationMs.coerceAtLeast(1) / 1000f)
+        if (maxOf(releaseAlong, average) < c.minVelocityDpPerSec) return null
+        // A finger that clearly turned back at the end changed its mind.
+        if (releaseAlong < -c.minVelocityDpPerSec) return null
+        return if (dyDp < 0) Swipe.UP else Swipe.DOWN
     }
 }

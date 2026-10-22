@@ -16,6 +16,12 @@ namespace SwipeTo.Receiver.Windows.Services;
 internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger log) : IPlaybackTarget
 {
     private static readonly TimeSpan OpenTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>A playing prefetch this close to the phone's position is moved only if it drifts further.</summary>
+    private const long PrefetchDriftMs = 500;
+
+    /// <summary>A playing prefetch this close to the handoff position is shown without a seek.</summary>
+    private const long WarmToleranceMs = 400;
     private static readonly HashSet<string> ImageTypes = ["image/jpeg", "image/png", "image/gif", "image/bmp", "image/webp", "image/tiff"];
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(15) };
 
@@ -83,6 +89,11 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
     /// Opens a video during the aim, paused and unseen (docs/protocol.md, 5.3), so the handoff that
     /// follows the swipe adopts an already-open player. Photos load fast enough not to need it.
     /// </summary>
+    /// <summary>
+    /// Opens the video hidden and muted and keeps it <em>playing</em> in step with the phone, so a swipe
+    /// only has to show it. (Held paused, it fell behind while the arm was up and the handoff had to seek
+    /// and fetch again over Wi-Fi: 800 ms on the A15.) Each repeat moves it only if it drifted.
+    /// </summary>
     public void Prefetch(MediaInfo media, long positionMs)
     {
         if (media.Kind != MediaKind.Video) return;
@@ -90,17 +101,21 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
         {
             if (_prefetch?.Url == media.Url)
             {
-                // Same video, the phone has played on: keep the prefetch near where it now is.
-                if (Math.Abs(_prefetch.PositionMs - positionMs) > 1_500 && _prefetch.Ready.IsCompletedSuccessfully)
+                _prefetch.Update(positionMs);
+                if (_prefetch.Ready.IsCompletedSuccessfully)
                 {
-                    _prefetch.Ready.Result.Player.PlaybackSession.Position = TimeSpan.FromMilliseconds(positionMs);
-                    _prefetch.PositionMs = positionMs;
+                    var session = _prefetch.Ready.Result.Player.PlaybackSession;
+                    var drift = (long)session.Position.TotalMilliseconds - positionMs;
+                    if (Math.Abs(drift) > PrefetchDriftMs) session.Position = TimeSpan.FromMilliseconds(positionMs);
                 }
                 return;
             }
             Release(_prefetch);
             var cancel = new CancellationTokenSource();
-            _prefetch = new PrefetchedVideo(media.Url, OpenVideoAsync(media, positionMs, cancel.Token), cancel) { PositionMs = positionMs };
+            var prefetch = new PrefetchedVideo(media.Url, cancel);
+            prefetch.Update(positionMs);
+            prefetch.Ready = OpenVideoAsync(media, prefetch.PositionNow, cancel.Token);
+            _prefetch = prefetch;
         }
         log.LogInformation("Prefetching video at {Position} ms", positionMs);
     }
@@ -159,10 +174,18 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
         HttpRangeStream stream;
         MediaPlayer player;
         Task opened;
+        var warm = false;
         if (ready is { } r)
         {
             (player, stream) = r;
             opened = Task.CompletedTask;
+            var session0 = player.PlaybackSession;
+            var drift = (long)session0.Position.TotalMilliseconds - positionMs;
+            // Already playing close to where the phone was: show it as it is, no seek, no new fetch.
+            warm = playing && session0.PlaybackState == MediaPlaybackState.Playing && Math.Abs(drift) <= WarmToleranceMs;
+            log.LogInformation("Prefetched video is {State} at {Drift:+0;-0} ms from the handoff position", session0.PlaybackState, drift);
+            player.IsMuted = false;
+            if (!warm) player.Pause();
         }
         else
         {
@@ -199,7 +222,7 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
         var openedMs = clock.ElapsedMilliseconds;
 
         var session = player.PlaybackSession;
-        session.Position = TimeSpan.FromMilliseconds(positionMs);
+        if (!warm) session.Position = TimeSpan.FromMilliseconds(positionMs);
         lock (_gate)
         {
             _player = player;
@@ -249,7 +272,20 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
             if (IsCurrent(player)) ui.TryEnqueue(() => EndPlayback("after a playback error"));
         };
 
-        if (playing) player.Play();
+        if (warm)
+        {
+            // No state change or seek is coming to reveal it: it is playing already.
+            await ui.RunAsync(() => _window?.RevealVideo());
+            Interlocked.Exchange(ref revealed, 1);
+            clock.Stop();
+            log.LogInformation("First frame playing {Ms} ms after handoff at {Position} ms, PREFETCHED warm ({KiB} KiB in {Requests} range requests)",
+                clock.ElapsedMilliseconds, (long)session.Position.TotalMilliseconds, stream.BytesFetched / 1024, stream.Requests);
+            RaiseChanged();
+        }
+        else if (playing)
+        {
+            player.Play();
+        }
         log.LogInformation("Video window up after {Shown} ms, media opened after {Opened} ms, at {Position} ms", shownMs, openedMs, positionMs);
     }
 
@@ -359,7 +395,7 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
     }
 
     /// <summary>Opens a video paused at a position, without showing it.</summary>
-    private static async Task<(MediaPlayer Player, HttpRangeStream Stream)> OpenVideoAsync(MediaInfo media, long positionMs, CancellationToken ct)
+    private static async Task<(MediaPlayer Player, HttpRangeStream Stream)> OpenVideoAsync(MediaInfo media, Func<long> positionNow, CancellationToken ct)
     {
         var stream = await HttpRangeStream.OpenAsync(Http, new Uri(media.Url), ct: ct);
         var player = new MediaPlayer { AutoPlay = false, AudioCategory = MediaPlayerAudioCategory.Movie };
@@ -377,8 +413,10 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
             await stream.DisposeAsync();
             throw;
         }
-        // Seeking now makes the pipeline read and decode around the position before the swipe.
-        player.PlaybackSession.Position = TimeSpan.FromMilliseconds(positionMs);
+        // Where the phone is by now (opening took a while), muted and unseen until the handoff.
+        player.IsMuted = true;
+        player.PlaybackSession.Position = TimeSpan.FromMilliseconds(positionNow());
+        player.Play();
         return (player, stream);
     }
 
@@ -394,9 +432,24 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
         }, TaskScheduler.Default);
     }
 
-    private sealed record PrefetchedVideo(string Url, Task<(MediaPlayer Player, HttpRangeStream Stream)> Ready, CancellationTokenSource Cancel)
+    private sealed class PrefetchedVideo(string url, CancellationTokenSource cancel)
     {
-        public long PositionMs { get; set; }
+        private readonly Stopwatch _since = new();
+        private long _positionMs;
+
+        public string Url { get; } = url;
+        public CancellationTokenSource Cancel { get; } = cancel;
+        public Task<(MediaPlayer Player, HttpRangeStream Stream)> Ready { get; set; } = null!;
+
+        /// <summary>The phone's position from its latest aim_start.</summary>
+        public void Update(long positionMs)
+        {
+            _positionMs = positionMs;
+            _since.Restart();
+        }
+
+        /// <summary>Where the phone should be now, assuming it kept playing.</summary>
+        public long PositionNow() => _positionMs + _since.ElapsedMilliseconds;
     }
 
     private void ReleasePlayer()

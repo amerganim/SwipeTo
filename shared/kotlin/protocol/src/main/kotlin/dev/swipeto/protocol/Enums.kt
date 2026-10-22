@@ -28,6 +28,11 @@ enum class MediaKind(override val wire: String) : WireEnum {
     IMAGE("image"),
 }
 
+enum class Transition(override val wire: String) : WireEnum {
+    NEXT("next"),
+    PREVIOUS("previous"),
+}
+
 enum class ControlAction(override val wire: String) : WireEnum {
     PLAY("play"),
     PAUSE("pause"),

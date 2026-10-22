@@ -31,6 +31,12 @@ public sealed record MockSenderOptions
     /// <summary>When set, the script aims for this long, ends the aim, then aims again before handing off.</summary>
     public TimeSpan AimHold { get; init; } = TimeSpan.Zero;
 
+    /// <summary>
+    /// When set, aim with a prefetch of the media, wait this long (a person deciding to swipe), then hand
+    /// off at the position the "phone" has reached meanwhile.
+    /// </summary>
+    public TimeSpan PrefetchLead { get; init; } = TimeSpan.Zero;
+
     /// <summary>Pause between scripted remote-control steps, to watch (or screenshot) each one.</summary>
     public TimeSpan StepDelay { get; init; } = TimeSpan.Zero;
 }
@@ -155,10 +161,20 @@ public sealed class MockSenderApp : IAsyncDisposable
                 return (true, $"held {_options.AimHold.TotalMilliseconds:0} ms, then ended");
             });
         }
-        await Client.AimStartAsync();
+        var position = _options.PositionMs;
+        if (_options.PrefetchLead > TimeSpan.Zero && media.Kind == MediaKind.Video)
+        {
+            await Client.AimStartAsync(new Prefetch(media, position));
+            await Task.Delay(_options.PrefetchLead);
+            if (playing) position += (long)_options.PrefetchLead.TotalMilliseconds; // the phone kept playing
+        }
+        else
+        {
+            await Client.AimStartAsync();
+        }
         await Step("handoff", async () =>
         {
-            var ack = await Client.HandoffAsync(media, _options.PositionMs, playing);
+            var ack = await Client.HandoffAsync(media, position, playing);
             return ack.Accepted ? (ack, $"accepted, media at {local}:{_media.Port}") : throw new InvalidOperationException($"refused: {ack.Reason}");
         });
     }
@@ -170,7 +186,8 @@ public sealed class MockSenderApp : IAsyncDisposable
         {
             await ConnectAsync();
             await HandoffAsync(playing: true);
-            await Step("playing at position", () => WaitState(s => s.Playing && s.PositionMs >= _options.PositionMs - 300 && s.PositionMs <= _options.PositionMs + 3000));
+            var expected = _options.PositionMs + (long)_options.PrefetchLead.TotalMilliseconds;
+            await Step("playing at position", () => WaitState(s => s.Playing && s.PositionMs >= expected - 300 && s.PositionMs <= expected + 3000));
 
             await Task.Delay(_options.StepDelay);
             await Client.ControlAsync(ControlAction.Pause);

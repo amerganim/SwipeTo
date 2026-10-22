@@ -15,6 +15,7 @@ const string usage = """
       --name <text>           Phone name (default "Mock phone")
       --state-file <path>     Where the sender id and trust tokens are kept
       --aim-hold <ms>         In --script, aim for this long and end the aim before handing off
+      --prefetch <ms>         Aim with a prefetch, wait this long, then hand off (measures instant start)
       --step-delay <ms>       In --script, wait this long before each remote-control step
       --script                Run discover → pair → hello → handoff → pause/seek/play → pull-back and exit
 
@@ -39,6 +40,7 @@ for (var i = 0; i < args.Length; i++)
         case "--name": options = options with { Name = Next() }; break;
         case "--state-file": options = options with { StateFile = Next() }; break;
         case "--aim-hold": options = options with { AimHold = TimeSpan.FromMilliseconds(long.Parse(Next())) }; break;
+        case "--prefetch": options = options with { PrefetchLead = TimeSpan.FromMilliseconds(long.Parse(Next())) }; break;
         case "--step-delay": options = options with { StepDelay = TimeSpan.FromMilliseconds(long.Parse(Next())) }; break;
         case "--script": script = true; break;
         default:

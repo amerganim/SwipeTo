@@ -17,6 +17,12 @@ public sealed class HttpRangeStream : Stream
     public const int DefaultBlockSize = 512 * 1024;
     private const int MaxCachedBlocks = 64; // 32 MiB at the default block size
 
+    /// <summary>
+    /// Blocks fetched ahead of the one being read. More in flight did not start playback sooner from a
+    /// Galaxy A15 (the player just buffered more first); its Wi-Fi delivers about 2.4 MB/s here.
+    /// </summary>
+    public const int ReadAheadBlocks = 1;
+
     private readonly HttpClient _http;
     private readonly Uri _url;
     private readonly int _blockSize;
@@ -48,6 +54,13 @@ public sealed class HttpRangeStream : Stream
         var first = await response.Content.ReadAsByteArrayAsync(ct);
         return new HttpRangeStream(http, url, length, blockSize, first);
     }
+
+    /// <summary>
+    /// How long a block keeps being retried when the network fails (not when the server refuses):
+    /// a phone whose Wi-Fi blips comes back within this, and playback merely stalls meanwhile
+    /// instead of failing (seen on the A15).
+    /// </summary>
+    public TimeSpan RetryWindow { get; set; } = TimeSpan.FromSeconds(20);
 
     /// <summary>Starts fetching the block holding <paramref name="offset"/> (and the next) without waiting.</summary>
     public void Prefetch(long offset)
@@ -87,7 +100,7 @@ public sealed class HttpRangeStream : Stream
         Interlocked.Exchange(ref _position, position + count);
 
         // Read ahead: players read sequentially most of the time.
-        if ((index + 1) * _blockSize < Length) _ = Block(index + 1);
+        ReadAhead(index);
         return count;
     }
 
@@ -128,6 +141,11 @@ public sealed class HttpRangeStream : Stream
         base.Dispose(disposing);
     }
 
+    private void ReadAhead(long index)
+    {
+        for (var next = index + 1; next <= index + ReadAheadBlocks && next * _blockSize < Length; next++) _ = Block(next);
+    }
+
     private Task<byte[]> Block(long index)
     {
         lock (_gate)
@@ -163,12 +181,33 @@ public sealed class HttpRangeStream : Stream
 
     private async Task<byte[]> FetchAsync(long from, long to)
     {
-        Interlocked.Increment(ref _requests);
-        using var response = await GetRangeAsync(_http, _url, from, to, _disposed.Token);
-        var data = await response.Content.ReadAsByteArrayAsync(_disposed.Token);
-        Interlocked.Add(ref _bytesFetched, data.Length);
-        return data.Length == to - from + 1 ? data : throw new IOException($"Expected {to - from + 1} bytes at {from}, got {data.Length}");
+        var deadline = DateTime.UtcNow + RetryWindow;
+        while (true)
+        {
+            try
+            {
+                Interlocked.Increment(ref _requests);
+                using var response = await GetRangeAsync(_http, _url, from, to, _disposed.Token);
+                var data = await response.Content.ReadAsByteArrayAsync(_disposed.Token);
+                Interlocked.Add(ref _bytesFetched, data.Length);
+                return data.Length == to - from + 1 ? data : throw new IOException($"Expected {to - from + 1} bytes at {from}, got {data.Length}");
+            }
+            catch (Exception e) when (IsNetworkFailure(e) && !_disposed.IsCancellationRequested && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(RetryDelay, _disposed.Token);
+            }
+        }
     }
+
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>The network failed (worth retrying), as opposed to the server answering no (404 after the session ended).</summary>
+    private static bool IsNetworkFailure(Exception e) => e switch
+    {
+        HttpRequestException h => h.StatusCode is null,
+        IOException or TaskCanceledException => true,
+        _ => false,
+    };
 
     private static async Task<HttpResponseMessage> GetRangeAsync(HttpClient http, Uri url, long from, long to, CancellationToken ct)
     {
@@ -178,7 +217,7 @@ public sealed class HttpRangeStream : Stream
         if (response.StatusCode != HttpStatusCode.PartialContent && !(from == 0 && response.StatusCode == HttpStatusCode.OK))
         {
             response.Dispose();
-            throw new HttpRequestException($"Media server answered {(int)response.StatusCode} to a range request");
+            throw new HttpRequestException($"Media server answered {(int)response.StatusCode} to a range request", null, response.StatusCode);
         }
         return response;
     }

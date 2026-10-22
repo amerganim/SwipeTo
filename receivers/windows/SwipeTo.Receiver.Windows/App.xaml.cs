@@ -55,7 +55,7 @@ public partial class App : Application
 
         if (!_settings.FirstRunDone && !_options.Background && _options.PairingCode is null)
         {
-            new FirstRunWindow(_settings.Name, RenameAsync).Activate();
+            new FirstRunWindow(_settings.Name, RenameAsync, _host?.Trust, firstRun: true).Activate();
             _settings.FirstRunDone = true;
             _settings.Save(_dataDir);
         }
@@ -75,13 +75,23 @@ public partial class App : Application
                 Platform = "windows",
                 Port = _options.Port ?? ReceiverOptions.DefaultPort,
                 FixedPairingCode = _options.PairingCode,
+                Advertise = !_options.NoAdvertise,
             },
             playback,
             ui,
             new JsonFileTrustStore(Path.Combine(_dataDir, "trusted-senders.json")),
             _logs);
-        host.SenderConnected += sender => SetStatus($"connected to {sender}");
-        host.SenderDisconnected += _ => SetStatus("ready");
+        host.SenderConnected += sender =>
+        {
+            SetStatus($"connected to {sender}");
+            playback.HideNotice();
+        };
+        host.SenderDisconnected += sender =>
+        {
+            SetStatus("ready");
+            // Playback carries on without the phone (docs/protocol.md, 5.7); say so, and how to stop it.
+            if (!playback.Snapshot.Ended) playback.ShowNotice($"{sender} disconnected. Still playing here. Press Esc to close.");
+        };
 
         try
         {
@@ -141,7 +151,7 @@ public partial class App : Application
         SetStatus(_status);
     }
 
-    private void ShowSettings() => new FirstRunWindow(_settings.Name, RenameAsync).Activate();
+    private void ShowSettings() => new FirstRunWindow(_settings.Name, RenameAsync, _host?.Trust, firstRun: false).Activate();
 
     private void SetStatus(string status)
     {

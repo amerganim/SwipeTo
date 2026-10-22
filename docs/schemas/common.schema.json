@@ -56,6 +56,40 @@
     "markerNonce": {
       "type": "string",
       "pattern": "^[A-Za-z0-9_-]{16,64}$"
+    },
+    "media": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "video",
+            "image"
+          ]
+        },
+        "url": {
+          "type": "string",
+          "pattern": "^https?://[^\\s]+$",
+          "maxLength": 2048
+        },
+        "mime": {
+          "type": "string",
+          "pattern": "^(video|image)/[A-Za-z0-9.+-]+$"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "durationMs": {
+          "$ref": "common.schema.json#/$defs/positionMs"
+        }
+      },
+      "required": [
+        "kind",
+        "url",
+        "mime",
+        "title"
+      ],
+      "additionalProperties": false
     }
   }
 }

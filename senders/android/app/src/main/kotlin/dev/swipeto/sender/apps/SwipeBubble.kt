@@ -31,6 +31,9 @@ sealed interface BubbleState {
      */
     data class Pick(val screen: String, val thumbs: List<Bitmap?>, val videos: Set<Int>) : BubbleState
 
+    /** Raised toward [screen] while an app plays something only a share can name: how to send it. */
+    data class Hint(val screen: String, val text: String) : BubbleState
+
     /** The screen has it: swipe down brings it back, left/right pages an [album], a tap opens the remote. */
     data class OnScreen(val screen: String, val album: Boolean = false) : BubbleState
 }
@@ -69,6 +72,7 @@ class SwipeBubble(
         val (text, accent) = when (next) {
             is BubbleState.Aiming -> (next.screen?.let { "↑  Swipe up to send to $it" } ?: "Looking for the screen…") to next.locked
             is BubbleState.Pick -> "Tap one to send to ${next.screen}" to true
+            is BubbleState.Hint -> next.text to false
             is BubbleState.OnScreen -> (if (next.album) "On ${next.screen}  ·  ← → more  ·  ↓ bring back" else "On ${next.screen}  ·  swipe down to bring back") to false
             BubbleState.Hidden -> "" to false
         }

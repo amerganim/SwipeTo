@@ -16,6 +16,9 @@ interface RemoteActions {
     fun skip(deltaMs: Long)
     fun bringBack()
     fun stopOnScreen()
+
+    /** Next (+1) or previous (-1) photo of an album on the screen. */
+    fun page(step: Int)
 }
 
 /**
@@ -29,8 +32,8 @@ class RemoteSession(private val context: Context, private val actions: RemoteAct
 
     val token: MediaSession.Token? get() = session?.sessionToken
 
-    /** Shows [remote] in the system media controls (null hides them). */
-    fun update(remote: LinkState.Remote?) {
+    /** Shows [remote] in the system media controls (null hides them); an [album] pages with next/previous. */
+    fun update(remote: LinkState.Remote?, album: Boolean = false) {
         if (remote == null) {
             session?.release()
             session = null
@@ -44,6 +47,8 @@ class RemoteSession(private val context: Context, private val actions: RemoteAct
                 override fun onFastForward() = actions.skip(SKIP_MS)
                 override fun onRewind() = actions.skip(-SKIP_MS)
                 override fun onStop() = actions.stopOnScreen()
+                override fun onSkipToNext() = actions.page(+1)
+                override fun onSkipToPrevious() = actions.page(-1)
                 override fun onCustomAction(action: String, extras: android.os.Bundle?) {
                     if (action == BRING_BACK) actions.bringBack()
                 }
@@ -63,7 +68,8 @@ class RemoteSession(private val context: Context, private val actions: RemoteAct
                 .setState(if (remote.playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED, remote.positionMs, if (remote.playing) 1f else 0f)
                 .setActions(
                     PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_PLAY_PAUSE or
-                        PlaybackState.ACTION_SEEK_TO or PlaybackState.ACTION_FAST_FORWARD or PlaybackState.ACTION_REWIND or PlaybackState.ACTION_STOP,
+                        PlaybackState.ACTION_SEEK_TO or PlaybackState.ACTION_FAST_FORWARD or PlaybackState.ACTION_REWIND or PlaybackState.ACTION_STOP or
+                        (if (album) PlaybackState.ACTION_SKIP_TO_NEXT or PlaybackState.ACTION_SKIP_TO_PREVIOUS else 0L),
                 )
                 .addCustomAction(PlaybackState.CustomAction.Builder(BRING_BACK, "Bring back to phone", android.R.drawable.ic_menu_revert).build())
                 .build(),
@@ -74,8 +80,20 @@ class RemoteSession(private val context: Context, private val actions: RemoteAct
      * The notification for [remote]: media style, so Android draws it as a player with the seek bar.
      * [intent] builds the PendingIntent for a service action.
      */
-    fun notification(builder: Notification.Builder, remote: LinkState.Remote, intent: (String) -> PendingIntent): Notification {
+    fun notification(builder: Notification.Builder, remote: LinkState.Remote, album: Boolean, intent: (String) -> PendingIntent): Notification {
         fun action(icon: Int, title: String, name: String) = Notification.Action.Builder(Icon.createWithResource(context, icon), title, intent(name)).build()
+        if (album) {
+            // Photos: previous / next through the album, bring back, stop.
+            return builder
+                .setContentTitle(remote.title)
+                .setContentText("Showing on ${remote.receiverName}")
+                .addAction(action(android.R.drawable.ic_media_previous, "Previous", ACTION_PREVIOUS))
+                .addAction(action(android.R.drawable.ic_media_next, "Next", ACTION_NEXT))
+                .addAction(action(android.R.drawable.ic_menu_revert, "Bring back", ACTION_BRING_BACK))
+                .addAction(action(android.R.drawable.ic_menu_close_clear_cancel, "Stop", ACTION_STOP_SCREEN))
+                .setStyle(Notification.MediaStyle().setMediaSession(token).setShowActionsInCompactView(0, 1, 2))
+                .build()
+        }
         return builder
             .setContentTitle(remote.title)
             .setContentText("Playing on ${remote.receiverName}")
@@ -100,6 +118,8 @@ class RemoteSession(private val context: Context, private val actions: RemoteAct
             ACTION_FORWARD -> actions.skip(SKIP_MS)
             ACTION_BRING_BACK -> actions.bringBack()
             ACTION_STOP_SCREEN -> actions.stopOnScreen()
+            ACTION_NEXT -> actions.page(+1)
+            ACTION_PREVIOUS -> actions.page(-1)
             else -> return false
         }
         return true
@@ -114,5 +134,7 @@ class RemoteSession(private val context: Context, private val actions: RemoteAct
         const val ACTION_FORWARD = "dev.swipeto.sender.remote.FORWARD"
         const val ACTION_BRING_BACK = "dev.swipeto.sender.remote.BRING_BACK"
         const val ACTION_STOP_SCREEN = "dev.swipeto.sender.remote.STOP"
+        const val ACTION_NEXT = "dev.swipeto.sender.remote.NEXT"
+        const val ACTION_PREVIOUS = "dev.swipeto.sender.remote.PREVIOUS"
     }
 }

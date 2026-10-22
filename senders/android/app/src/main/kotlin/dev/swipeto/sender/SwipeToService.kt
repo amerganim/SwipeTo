@@ -56,6 +56,7 @@ class SwipeToService : Service() {
                 engine.bringBack()
             }
             override fun stopOnScreen() = engine.stopOnScreen()
+            override fun page(step: Int) = engine.pageRemote(step)
         })
         bubble = SwipeBubble(
             this,
@@ -64,6 +65,8 @@ class SwipeToService : Service() {
                 scope.launch {
                     when {
                         swipe == Swipe.UP && picking != null -> pick(0)
+                        swipe == Swipe.UP && bubble.showing is BubbleState.Hint ->
+                            android.widget.Toast.makeText(this@SwipeToService, "${engine.shareHint()?.appLabel ?: "This app"} doesn't say what's playing. Tap its Share button, then SwipeTo.", android.widget.Toast.LENGTH_LONG).show()
                         swipe == Swipe.UP -> engine.swipeUpFromAnywhere()
                         swipe == Swipe.DOWN && engine.link.value is LinkState.Remote -> engine.bringBack()
                         swipe == Swipe.LEFT || swipe == Swipe.RIGHT -> engine.onSwipe(swipe)
@@ -91,21 +94,24 @@ class SwipeToService : Service() {
                 if (link is LinkState.Idle && gallery && external == null && aim is AimState.Targeted && picking == null) startPicking(aim.target.name)
                 if (link !is LinkState.Idle || !gallery) picking = null
                 val pickNow = picking
+                val album = link is LinkState.Remote && engine.album.value?.isAlbum == true && link.kind == dev.swipeto.protocol.MediaKind.IMAGE
                 val state = when {
-                    link is LinkState.Remote && engine.handedFromOtherApp ->
-                        BubbleState.OnScreen(link.receiverName, album = engine.album.value?.isAlbum == true)
+                    link is LinkState.Remote && engine.handedFromOtherApp && onScreenFresh(link) ->
+                        BubbleState.OnScreen(link.receiverName, album = album)
                     pickNow != null -> pickNow.second
                     external != null && aim is AimState.Targeted -> BubbleState.Aiming(aim.target.name, aim.verified)
+                    external == null && aim is AimState.Targeted && engine.shareHint() != null ->
+                        BubbleState.Hint(aim.target.name, "To send this to ${aim.target.name}: tap Share, then SwipeTo")
                     external != null && aim is AimState.Searching -> BubbleState.Aiming(null, false)
                     else -> BubbleState.Hidden
                 }
                 bubble.show(state)
                 // While a screen plays, the phone's standard media controls work it.
-                remote.update(link as? LinkState.Remote)
+                remote.update(link as? LinkState.Remote, album)
                 notifications.notify(
                     ID,
                     if (link is LinkState.Remote) {
-                        remote.notification(base(), link) { name -> action(name, name.hashCode()) }
+                        remote.notification(base(), link, album) { name -> action(name, name.hashCode()) }
                     } else {
                         notification(
                             if (external != null) "${external.item.title}: lift the phone toward a screen to send it" else "Ready to send to a screen",
@@ -155,6 +161,24 @@ class SwipeToService : Service() {
         scope.cancel()
         EventLog.i("background service stopped")
         super.onDestroy()
+    }
+
+    /** What the "On Laptop" bubble last showed, and until when: it gives way after a while (the notification stays). */
+    private var onScreenKey: String? = null
+    private var onScreenUntil = 0L
+
+    /** The bubble shows for [ON_SCREEN_SHOWN_MS] after each new item on the screen, then hides, so it doesn't sit over other apps. */
+    private fun onScreenFresh(remote: LinkState.Remote): Boolean {
+        val key = "${remote.receiverName}|${remote.title}"
+        if (key != onScreenKey) {
+            onScreenKey = key
+            onScreenUntil = System.currentTimeMillis() + ON_SCREEN_SHOWN_MS
+            scope.launch {
+                kotlinx.coroutines.delay(ON_SCREEN_SHOWN_MS + 50)
+                pickTick.value++
+            }
+        }
+        return System.currentTimeMillis() < onScreenUntil
     }
 
     /** The newest photos and videos on offer over Gallery, and the bubble showing them; null when not picking. */
@@ -218,6 +242,7 @@ class SwipeToService : Service() {
         const val CHANNEL = "ready"
         const val FOREGROUND_POLL_MS = 1_500L
         const val PICK_SHOWN_MS = 12_000L
+        const val ON_SCREEN_SHOWN_MS = 8_000L
         const val THUMB_PX = 240
         const val ID = 1
         const val ACTION_STOP = "dev.swipeto.sender.STOP"

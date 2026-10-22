@@ -19,7 +19,7 @@ public sealed class HttpRangeStream : Stream
 
     /// <summary>
     /// Blocks fetched ahead of the one being read. More in flight did not start playback sooner from a
-    /// Galaxy A15 (the player just buffered more first); its Wi-Fi delivers about 2.4 MB/s here.
+    /// the A15 test phone (the player just buffered more first); its Wi-Fi delivers about 2.4 MB/s here.
     /// </summary>
     public const int ReadAheadBlocks = 1;
 

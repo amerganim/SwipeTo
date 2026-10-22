@@ -16,7 +16,7 @@ plays it. The phone then acts as a remote, and can pull the media back.
 | Role | Examples | Does |
 |---|---|---|
 | **Sender** | Android phone, iPhone | discovers receivers, pairs, aims, hands off, remote-controls, pulls back; serves its own media over local HTTP |
-| **Receiver** | Windows PC, Samsung TV, Android TV, Mac | advertises itself, shows the pairing code, plays media, reports state |
+| **Receiver** | Windows PC, Tizen TV, Android TV, Mac | advertises itself, shows the pairing code, plays media, reports state |
 
 Everything stays on the local network. Media MUST NOT be routed through any
 cloud service.

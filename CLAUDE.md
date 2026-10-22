@@ -5,7 +5,7 @@ SwipeTo lets a user who is watching a video (or viewing photos) on their phone *
 
 It is designed as an **open, platform-neutral handoff protocol**:
 - **Senders** (phones): Android (Kotlin) first, iOS (Swift) later.
-- **Receivers** (big screens): Windows (C#/.NET) first, then Samsung Tizen TV (.NET or web), Android TV, macOS.
+- **Receivers** (big screens): Windows (C#/.NET) first, then Tizen TV (.NET or web), Android TV, macOS.
 
 This is a **live handoff**, not screen mirroring: the receiver plays the media itself, and the phone becomes a remote.
 
@@ -48,8 +48,11 @@ This is a **live handoff**, not screen mirroring: the receiver plays the media i
 8. Write tests alongside code. Run the tests before declaring a task done.
 9. Things Claude Code cannot verify on its own (physical phone, camera, sensors, real network between devices): write a short manual test checklist in the PR/summary and say so explicitly.
 
-## Confidentiality
-This project may become the subject of a patent application. Keep the repository **private**. Do not add public CI badges, publish packages, or push to public remotes.
+## Open source
+The repository is public: SwipeTo is an open handoff protocol. Never commit secrets or personal data: API keys,
+trust tokens, pairing codes, signing keys, device serial numbers, people's or devices' names from test logs, Wi-Fi
+names or addresses. Test data uses generated values; receivers keep user secrets (like a YouTube API key)
+encrypted in their own settings, never in the repository.
 
 ## The plan
 See `PLAN.md` for phases, tasks, and acceptance criteria. Work one phase at a time. Do not start a phase until the previous phase's acceptance criteria pass.

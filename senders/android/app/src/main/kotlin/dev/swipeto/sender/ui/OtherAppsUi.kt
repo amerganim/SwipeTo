@@ -57,9 +57,10 @@ fun OtherAppsSection(engine: MainViewModel, showFields: Boolean) {
     var resumed by remember { mutableIntStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumed++ }
     val overlay = remember(resumed) { Settings.canDrawOverlays(context) }
-    val videos = remember(resumed) { engine.mediaResolver.hasPermission }
+    val videos = remember(resumed) { engine.mediaResolver.hasPermission && engine.recentMedia.hasPermission }
+    val usage = remember(resumed) { engine.foregroundApp.hasAccess }
     val notify = remember(resumed) { Build.VERSION.SDK_INT < 33 || granted(context, Manifest.permission.POST_NOTIFICATIONS) }
-    val askVideos = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { resumed++ }
+    val askVideos = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { resumed++ }
     val askNotify = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { resumed++ }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -96,11 +97,22 @@ fun OtherAppsSection(engine: MainViewModel, showFields: Boolean) {
         }
         Requirement(
             done = videos,
-            title = "Find the video",
-            why = "Access to videos lets SwipeTo find the file another app is playing, to stream it to the screen.",
-            button = "Allow access to videos…",
+            title = "Find the photo or video",
+            why = "Access to photos and videos lets SwipeTo find the file another app is playing, and offer your newest photos, to stream them to the screen.",
+            button = "Allow access to photos and videos…",
             tag = "grant-videos",
-        ) { askVideos.launch(engine.mediaResolver.permission) }
+        ) { askVideos.launch((engine.recentMedia.permissions + engine.mediaResolver.permission).distinct().toTypedArray()) }
+        Requirement(
+            done = usage,
+            title = "Know when Gallery is open",
+            why = "Usage access tells SwipeTo which app is in front (only its name), so lifting the phone in Gallery offers your newest photos to send.",
+            button = "Allow usage access…",
+            tag = "grant-usage",
+        ) {
+            context.startActivity(
+                Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS, Uri.parse("package:${context.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
         Requirement(
             done = overlay,
             title = "Swipe bubble",

@@ -23,6 +23,8 @@ import dev.swipeto.protocol.Prepare
 import dev.swipeto.sender.aim.Preparer
 import dev.swipeto.sender.apps.ActiveMediaWatcher
 import dev.swipeto.sender.apps.ExternalPlayback
+import dev.swipeto.sender.apps.ForegroundApp
+import dev.swipeto.sender.apps.RecentMedia
 import dev.swipeto.sender.apps.LocalMediaResolver
 import dev.swipeto.sender.apps.SessionSnapshot
 import dev.swipeto.protocol.Transition
@@ -140,6 +142,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _mediaAccess = MutableStateFlow(mediaWatcher.hasAccess)
     val mediaAccess: StateFlow<Boolean> = _mediaAccess.asStateFlow()
     val mediaResolver = LocalMediaResolver(app)
+    val foregroundApp = ForegroundApp(app)
+    val recentMedia = RecentMedia(app)
+
+    /** A gallery app is in front (from the background service): a raise offers the newest photos and videos. */
+    private val _galleryOpen = MutableStateFlow(false)
+    val galleryOpen: StateFlow<Boolean> = _galleryOpen.asStateFlow()
+
+    /** The screen the phone was last aimed at, for a pick made on the bubble after lowering it. */
+    @Volatile private var lastTarget: LinkTarget? = null
 
     /** Another app's media, resolved to a file on the phone, while it plays; null otherwise. */
     private val _external = MutableStateFlow<Source?>(null)
@@ -203,7 +214,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     @Volatile private var handedFrom: LocalPlayback = inAppPlayback
 
     /** The screen has media that came from another app (the bubble offers bring-back). */
-    val handedFromOtherApp: Boolean get() = handedFrom is ExternalPlayback
+    val handedFromOtherApp: Boolean get() = handedFrom is ExternalPlayback || sentFromGallery
+
+    /** The current handoff was picked on the bubble over Gallery. */
+    @Volatile private var sentFromGallery = false
 
     private val coordinator = HandoffCoordinator(
         trust = trust,
@@ -253,6 +267,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         ),
         fallback = FallbackResolver,
         onLocked = { targeted ->
+            lastTarget = targeted.target
             _haptics.tryEmit(Haptic.TARGET_LOCKED)
             // The camera proved which screen is in front: remember which way that is.
             if (targeted.verified) learnBearing(targeted.target.id, fromCamera = true)
@@ -360,8 +375,46 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun source(): Source? = if (foreground) _media.value?.let { Source(it, inAppPlayback) } else _external.value
 
-    /** Sensors, links and preparing run while SwipeTo is in front or another app plays something sendable. */
-    private val active: Boolean get() = foreground || _external.value != null
+    /** Sensors, links and preparing run while SwipeTo is in front, another app plays something sendable, or a gallery is open. */
+    private val active: Boolean get() = foreground || _external.value != null || _galleryOpen.value
+
+    /** From the background service: the app in front changed. */
+    fun setForegroundApp(packageName: String?) {
+        val gallery = !foreground && packageName in ForegroundApp.GALLERIES
+        if (gallery == _galleryOpen.value) return
+        _galleryOpen.value = gallery
+        EventLog.i(if (gallery) "gallery in front: $packageName" else "gallery closed")
+        warmLinks()
+        updateAiming()
+    }
+
+    /**
+     * A photo or video picked on the bubble over Gallery: sends [items]`[index]` to the screen the
+     * phone was aimed at; the rest page with left/right swipes. A video Gallery is playing inline
+     * starts where Gallery is.
+     */
+    suspend fun sendFromGallery(items: List<PickedItem>, index: Int): Boolean {
+        if (link.value !is LinkState.Idle || index !in items.indices) return false
+        val target = (aimState.value as? AimState.Targeted)?.target ?: lastTarget ?: screenToPrepare() ?: run {
+            _hints.tryEmit("No paired screen nearby.")
+            return false
+        }
+        val receiver = discovery.receivers.value.firstOrNull { it.id == target.id } ?: return false
+        val item = items[index]
+        val conn = if (aimState.value is AimState.Targeted) aim.takeTarget()?.second else links.take(receiver.id)
+        showLocally(Album(items, index), play = false)
+        val inline = _unresolved.value?.takeIf { item.kind == MediaKind.VIDEO && it.packageName in ForegroundApp.GALLERIES }
+        handedFrom = inline?.let { ExternalPlayback(mediaWatcher, it.packageName) } ?: inAppPlayback
+        handedFromAppPaused = false
+        sentFromGallery = true
+        EventLog.i("gallery pick: ${item.kind} ${item.title} (${index + 1} of ${items.size}) to ${receiver.name}")
+        val sent = coordinator.sendTo(Target(receiver.id, receiver.name, receiver.webSocketUrl, receiver.host), sharedMedia(item), conn)
+        if (sent) {
+            trust.markUsed(receiver.id)
+            _haptics.tryEmit(Haptic.SENT)
+        }
+        return sent
+    }
 
     /** From the activity: sensors, camera and standby links run only while the app is in front. */
     fun setForeground(value: Boolean) {
@@ -498,6 +551,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         EventLog.i("swipe up: handing off ${picked.title} to ${target.name}${source.app?.let { " from $it" } ?: ""}")
         handedFrom = source.playback
         handedFromAppPaused = false
+        sentFromGallery = false
         val sent = coordinator.sendTo(
             Target(receiver.id, receiver.name, receiver.webSocketUrl, receiver.host),
             sharedMedia(picked),
@@ -532,7 +586,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     AimPhase.AIMING -> {
                         headingAtRaise = sample.headingDeg
                         EventLog.i("raise detected at %.1f°, heading %s".format(sample.elevationDeg, sample.headingDeg?.let { "%.0f°".format(it) } ?: "unknown"))
-                        if (source() != null) aim.onAimStart()
+                        if (source() != null || _galleryOpen.value) aim.onAimStart()
                     }
                     AimPhase.IDLE -> {
                         EventLog.i("lowered at %.1f°".format(sample.elevationDeg))
@@ -573,7 +627,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         discovery.receivers.value.filter { trust.isPaired(it.id) }.map { LinkTarget(it.id, it.name, it.webSocketUrl) }
 
     private fun warmLinks() {
-        if (!active || link.value !is LinkState.Idle || source() == null) return
+        if (!active || link.value !is LinkState.Idle || (source() == null && !_galleryOpen.value)) return
         viewModelScope.launch { links.warm(pairedTargets()) }
     }
 
@@ -652,6 +706,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // A standby link to this screen would refuse a second hello; use it instead of a new connection.
         val ready = links.take(receiver.id)
         handedFrom = inAppPlayback
+        sentFromGallery = false
         val sent = coordinator.sendTo(Target(receiver.id, receiver.name, receiver.webSocketUrl, receiver.host), sharedMedia(picked), ready)
         if (sent) {
             trust.markUsed(receiver.id)

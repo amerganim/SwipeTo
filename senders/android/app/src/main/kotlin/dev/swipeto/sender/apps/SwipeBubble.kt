@@ -2,6 +2,7 @@ package dev.swipeto.sender.apps
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
@@ -10,6 +11,9 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.WindowManager
+import android.widget.HorizontalScrollView
+import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
 import dev.swipeto.sender.aim.Swipe
 import dev.swipeto.sender.aim.SwipeClassifier
@@ -21,8 +25,14 @@ sealed interface BubbleState {
     /** Raised toward a screen (or still finding it): swipe up on the bubble sends. */
     data class Aiming(val screen: String?, val locked: Boolean) : BubbleState
 
-    /** The screen has it: swipe down on the bubble brings it back, a tap opens the remote. */
-    data class OnScreen(val screen: String) : BubbleState
+    /**
+     * Raised in Gallery, which does not say what it shows: the newest photos and videos to tap
+     * ([thumbs] in the same order; null where no thumbnail could be made). Swipe up sends the first.
+     */
+    data class Pick(val screen: String, val thumbs: List<Bitmap?>, val videos: Set<Int>) : BubbleState
+
+    /** The screen has it: swipe down brings it back, left/right pages an [album], a tap opens the remote. */
+    data class OnScreen(val screen: String, val album: Boolean = false) : BubbleState
 }
 
 /**
@@ -35,13 +45,18 @@ class SwipeBubble(
     private val classifier: SwipeClassifier,
     private val onSwipe: (Swipe) -> Unit,
     private val onTap: () -> Unit,
+    private val onPick: (Int) -> Unit = {},
 ) {
     private val windows = context.getSystemService(WindowManager::class.java)
     private val density = context.resources.displayMetrics.density
-    private var view: TextView? = null
+    private var root: LinearLayout? = null
+    private var pill: TextView? = null
+    private var strip: LinearLayout? = null
     private var state: BubbleState = BubbleState.Hidden
 
     val canShow: Boolean get() = Settings.canDrawOverlays(context)
+
+    val showing: BubbleState get() = state
 
     fun show(next: BubbleState) {
         if (next == state) return
@@ -50,24 +65,48 @@ class SwipeBubble(
             remove()
             return
         }
-        val pill = view ?: create().also { view = it }
+        if (root == null) create()
         val (text, accent) = when (next) {
             is BubbleState.Aiming -> (next.screen?.let { "↑  Swipe up to send to $it" } ?: "Looking for the screen…") to next.locked
-            is BubbleState.OnScreen -> "On ${next.screen}  ·  swipe down to bring back" to false
+            is BubbleState.Pick -> "Tap one to send to ${next.screen}" to true
+            is BubbleState.OnScreen -> (if (next.album) "On ${next.screen}  ·  ← → more  ·  ↓ bring back" else "On ${next.screen}  ·  swipe down to bring back") to false
             BubbleState.Hidden -> "" to false
         }
-        pill.text = text
-        (pill.background as GradientDrawable).setStroke(dp(3), if (accent) ACCENT else Color.TRANSPARENT)
+        pill!!.text = text
+        (pill!!.background as GradientDrawable).setStroke(dp(3), if (accent) ACCENT else Color.TRANSPARENT)
+        fillStrip((next as? BubbleState.Pick))
     }
 
     fun remove() {
-        view?.let { runCatching { windows.removeView(it) } }
-        view = null
+        root?.let { runCatching { windows.removeView(it) } }
+        root = null
+        pill = null
+        strip = null
+        state = BubbleState.Hidden
+    }
+
+    private fun fillStrip(pick: BubbleState.Pick?) {
+        val row = strip ?: return
+        row.removeAllViews()
+        (row.parent as HorizontalScrollView).visibility = if (pick == null) android.view.View.GONE else android.view.View.VISIBLE
+        pick ?: return
+        pick.thumbs.forEachIndexed { index, bitmap ->
+            row.addView(
+                ImageView(context).apply {
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    if (bitmap != null) setImageBitmap(bitmap) else setBackgroundColor(Color.DKGRAY)
+                    contentDescription = if (index in pick.videos) "Video ${index + 1}" else "Photo ${index + 1}"
+                    setOnClickListener { onPick(index) }
+                    if (index in pick.videos) foreground = context.getDrawable(android.R.drawable.ic_media_play)
+                },
+                LinearLayout.LayoutParams(dp(84), dp(84)).apply { marginEnd = dp(6) },
+            )
+        }
     }
 
     @SuppressLint("ClickableViewAccessibility")
-    private fun create(): TextView {
-        val pill = TextView(context).apply {
+    private fun create() {
+        val label = TextView(context).apply {
             setTextColor(Color.WHITE)
             textSize = 16f
             gravity = Gravity.CENTER
@@ -83,7 +122,7 @@ class SwipeBubble(
         var downY = 0f
         var downAt = 0L
         var tracker: VelocityTracker? = null
-        pill.setOnTouchListener { _, e ->
+        label.setOnTouchListener { _, e ->
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downX = e.rawX
@@ -95,12 +134,14 @@ class SwipeBubble(
                 MotionEvent.ACTION_UP -> {
                     tracker?.addMovement(e)
                     tracker?.computeCurrentVelocity(1000)
+                    val vx = (tracker?.xVelocity ?: 0f) / density
                     val vy = (tracker?.yVelocity ?: 0f) / density
                     tracker?.recycle()
                     tracker = null
                     val dx = (e.rawX - downX) / density
                     val dy = (e.rawY - downY) / density
-                    val swipe = classifier.classify(dx, dy, e.eventTime - downAt, vy)
+                    val duration = e.eventTime - downAt
+                    val swipe = classifier.classify(dx, dy, duration, vy) ?: classifier.classifyHorizontal(dx, dy, duration, vx)
                     when {
                         swipe != null -> onSwipe(swipe)
                         kotlin.math.hypot(dx, dy) < 12f -> onTap()
@@ -113,6 +154,23 @@ class SwipeBubble(
             }
             true
         }
+        val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+        val scroller = HorizontalScrollView(context).apply {
+            isHorizontalScrollBarEnabled = false
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16).toFloat()
+                setColor(Color.argb(225, 20, 20, 24))
+            }
+            addView(row)
+            visibility = android.view.View.GONE
+        }
+        val column = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            addView(scroller, LinearLayout.LayoutParams(dp(340), LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) })
+            addView(label)
+        }
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -124,8 +182,10 @@ class SwipeBubble(
             gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
             y = dp(140)
         }
-        windows.addView(pill, params)
-        return pill
+        windows.addView(column, params)
+        root = column
+        pill = label
+        strip = row
     }
 
     private fun dp(value: Int) = (value * density).toInt()

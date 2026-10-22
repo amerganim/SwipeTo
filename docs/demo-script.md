@@ -52,8 +52,7 @@ Do each shot 2–3 times. Swipes that miss are fine to cut; the glow before the 
 - [ ] The position matches: the clock on the PC is within half a second of the phone at the swipe.
 - [ ] No pairing code, trust token, Wi-Fi name or IP address is readable in any frame.
 - [ ] No third-party video or music you have no rights to. Use your own clip.
-- [ ] The repository is private and the project may be patented: **do not publish the video
-      publicly** without the owner's OK. Share it privately (unlisted links count as public).
+- [ ] Nothing personal on either screen: notifications, other apps' content, account names.
 
 ## Logs to keep with the recording
 

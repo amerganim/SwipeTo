@@ -9,10 +9,10 @@ Every threshold lives in one file:
 **Camera elevation**: where the back camera points, in degrees above the horizon. It comes from
 the game rotation vector (accelerometer and gyroscope), falling back to the rotation vector, the
 gravity sensor, and finally the **raw accelerometer through a low-pass filter**. That last one is
-what the Galaxy A15 uses: like many budget phones it has no gyroscope. Turning the phone between
+what the A15 test phone uses: like many budget phones it has no gyroscope. Turning the phone between
 portrait and landscape does not change the elevation.
 
-| Pose (measured on a Galaxy A15) | Elevation |
+| Pose (measured on the A15 test phone) | Elevation |
 |---|---|
 | Flat on a table, screen up | −88° |
 | Watching a video in your hands | −45° to −75° |

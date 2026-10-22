@@ -11,7 +11,7 @@ namespace SwipeTo.MockReceiver;
 /// media and a chunk from the middle with HTTP Range requests, which proves the sender's media server
 /// is reachable and supports seeking.
 /// </summary>
-public sealed class SimulatedPlayback(HttpClient http) : IPlaybackTarget
+public sealed class SimulatedPlayback(HttpClient http, IReadOnlySet<string>? services = null) : IPlaybackTarget
 {
     private readonly object _gate = new();
     private readonly Stopwatch _clock = new();
@@ -26,7 +26,11 @@ public sealed class SimulatedPlayback(HttpClient http) : IPlaybackTarget
 
     public MediaInfo? Current { get; private set; }
 
-    public string? CurrentUrl => Current?.Url;
+    public string? CurrentUrl => Current?.Key;
+
+    /// <summary>App content resolves when its service is listed and the title is not "unknown" (for tests).</summary>
+    public Task<bool> ResolveAppAsync(MediaInfo media, CancellationToken ct) =>
+        Task.FromResult(media.ContentId is not null || !media.Title.Contains("unknown", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>URL prefetched (the first bytes already fetched), or null.</summary>
     public string? Prefetched { get; private set; }
@@ -51,12 +55,22 @@ public sealed class SimulatedPlayback(HttpClient http) : IPlaybackTarget
         Console.WriteLine("[player] prefetch discarded");
     }
 
-    public bool CanPlay(MediaInfo media) => media.Kind == MediaKind.Video || media.Kind == MediaKind.Image;
+    public bool CanPlay(MediaInfo media) => media.Kind switch
+    {
+        MediaKind.Video or MediaKind.Image => true,
+        MediaKind.App => services?.Contains(media.Service!) == true,
+        _ => false,
+    };
 
     public async Task LoadAsync(MediaInfo media, long positionMs, bool playing, Transition? transition, CancellationToken ct)
     {
         LastTransition = transition;
-        if (Prefetched == media.Url)
+        if (media.IsApp)
+        {
+            // Opened with the service's own player: nothing to fetch from the phone.
+            Console.WriteLine($"[player] opening {media.Service} \"{media.Title}\"");
+        }
+        else if (Prefetched == media.Url)
         {
             PrefetchHits++;
             Prefetched = null;
@@ -75,12 +89,12 @@ public sealed class SimulatedPlayback(HttpClient http) : IPlaybackTarget
             _basePositionMs = positionMs;
             _ended = false;
             _clock.Reset();
-            if (playing && media.Kind == MediaKind.Video) _clock.Start();
+            if (playing && media.Kind != MediaKind.Image) _clock.Start();
         }
         Console.WriteLine($"[player] loaded \"{media.Title}\" at {positionMs} ms, {(playing ? "playing" : "paused")}");
     }
 
-    public void Play() => Update(() => { if (!_ended && Current?.Kind == MediaKind.Video) _clock.Start(); }, "play");
+    public void Play() => Update(() => { if (!_ended && Current is { Kind: not MediaKind.Image }) _clock.Start(); }, "play");
 
     public void Pause() => Update(() => _clock.Stop(), "pause");
 

@@ -102,7 +102,25 @@ public sealed record Prepare(MediaInfo Media, long PositionMs) : Message
     public override string Type => MessageTypes.Prepare;
 }
 
-public sealed record MediaInfo(MediaKind Kind, string Url, string Mime, string Title, long? DurationMs = null);
+/// <summary>
+/// A file the phone serves (<see cref="MediaKind.Video"/>, <see cref="MediaKind.Image"/>), or another
+/// app's content (<see cref="MediaKind.App"/>): then <see cref="Url"/> is the optional <c>contentUrl</c>
+/// (empty if none), <see cref="Mime"/> is empty and <see cref="Service"/> is set.
+/// </summary>
+public sealed record MediaInfo(MediaKind Kind, string Url, string Mime, string Title, long? DurationMs = null)
+{
+    public string? Service { get; init; }
+    public string? ContentId { get; init; }
+    public string? Channel { get; init; }
+
+    public bool IsApp => Kind == MediaKind.App;
+
+    /// <summary>What identifies this media: the URL of a file; for app content, its service and id (or title and channel).</summary>
+    public string Key => IsApp ? $"{Service}:{ContentId ?? Title + "|" + Channel}" : Url;
+
+    public static MediaInfo App(string service, string title, string? channel = null, string? contentId = null, string? contentUrl = null, long? durationMs = null) =>
+        new(MediaKind.App, contentUrl ?? "", "", title, durationMs) { Service = service, ContentId = contentId, Channel = channel };
+}
 
 /// <summary><see cref="Transition"/>: the media follows on from what is showing (album navigation).</summary>
 public sealed record Handoff(MediaInfo Media, long PositionMs, bool Playing, Transition? Transition = null) : Message

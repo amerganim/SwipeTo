@@ -51,7 +51,8 @@ fun interface PairingPrompt {
 
 data class Target(val id: String, val name: String, val webSocketUrl: String, val host: InetAddress)
 
-data class SharedMedia(val file: MediaFile, val kind: MediaKind, val title: String, val durationMs: Long?)
+/** A file the phone serves, or (with [app], and no file) another app's content handed off by reference. */
+data class SharedMedia(val file: MediaFile?, val kind: MediaKind, val title: String, val durationMs: Long?, val app: MediaInfo? = null)
 
 sealed interface LinkState {
     data object Idle : LinkState
@@ -139,15 +140,17 @@ class HandoffCoordinator(
         try {
             if (greeted == null && !helloOrPair(conn, target)) return false
 
-            // A video that already finished here starts over there.
-            val finished = media.durationMs?.let { local.positionMs >= it - END_SLACK_MS } ?: false
-            val playing = media.kind == MediaKind.VIDEO && (local.isPlaying || finished)
-            val position = if (media.kind == MediaKind.VIDEO && !finished) local.positionMs else 0L
-            val info = media.info(publisher.publish(media.file, target.host))
+            // A video that finished here, or is about to, starts over there (an 8 s clip handed off at
+            // 7 s ended on the laptop at once: seen on the A15 test phone).
+            val finished = media.durationMs?.let { local.positionMs >= it - NEAR_END_MS } ?: false
+            val timed = media.kind != MediaKind.IMAGE
+            val playing = timed && (local.isPlaying || finished)
+            val position = if (timed && !finished) local.positionMs else 0L
+            val info = media.app ?: media.info(publisher.publish(media.file!!, target.host))
             val ack = conn.handoff(info, position, playing)
             if (!ack.accepted) return fail(refusal(target.name, ack.reason), conn)
 
-            val overlap = playing && media.kind == MediaKind.VIDEO
+            val overlap = playing && media.kind != MediaKind.IMAGE
             if (!overlap) local.pause()
             lastStateAt = clock()
             log("handed off to ${target.name} at $position ms, playing=$playing")
@@ -177,8 +180,8 @@ class HandoffCoordinator(
         val conn = connection?.takeIf { !remote.reconnecting } ?: return false
         val target = target ?: return false
         return try {
-            val info = media.info(publisher.publish(media.file, target.host))
-            val playing = media.kind == MediaKind.VIDEO
+            val info = media.app ?: media.info(publisher.publish(media.file!!, target.host))
+            val playing = media.kind != MediaKind.IMAGE
             val ack = conn.handoff(info, 0, playing, transition)
             if (!ack.accepted) {
                 _notices.tryEmit(refusal(target.name, ack.reason))
@@ -199,8 +202,18 @@ class HandoffCoordinator(
 
     fun togglePlay() {
         val remote = _state.value as? LinkState.Remote ?: return
-        val action = if (remote.playing) ControlAction.PAUSE else ControlAction.PLAY
-        if (sendControl(action)) _state.value = remote.copy(playing = !remote.playing)
+        setPlaying(!remote.playing)
+    }
+
+    fun setPlaying(play: Boolean) {
+        val remote = _state.value as? LinkState.Remote ?: return
+        if (sendControl(if (play) ControlAction.PLAY else ControlAction.PAUSE)) _state.value = remote.copy(playing = play)
+    }
+
+    /** Closes playback on the screen; the phone stays paused where the screen stopped (its final `state`). */
+    fun stopOnScreen() {
+        if (_state.value !is LinkState.Remote) return
+        sendControl(ControlAction.STOP)
     }
 
     fun seekTo(positionMs: Long) {
@@ -365,7 +378,9 @@ class HandoffCoordinator(
         lastStateAt = clock()
         if (state.ended) {
             // Closed on the screen (or finished): the media is back here, paused where it stopped.
-            _notices.tryEmit("${remote.receiverName} stopped playing.")
+            _notices.tryEmit(
+                if (handedOff?.service == "web") "Opened in ${remote.receiverName}'s browser." else "${remote.receiverName} stopped playing.",
+            )
             finishRemote(state.positionMs, play = false)
         } else {
             _state.value = remote.copy(positionMs = state.positionMs, playing = state.playing)
@@ -418,8 +433,8 @@ class HandoffCoordinator(
     }
 
     private companion object {
-        /** Within this of the end counts as finished. */
-        const val END_SLACK_MS = 500L
+        /** Within this of the end counts as finished: the screen starts over. */
+        const val NEAR_END_MS = 5_000L
 
         /** One reconnect attempt: hello and handoff answered within this. */
         const val REJOIN_TIMEOUT_MS = 5_000L
@@ -430,8 +445,9 @@ class HandoffCoordinator(
         ErrorCode.UNSUPPORTED_MEDIA -> "$name can't play this file. Try another video or photo."
         ErrorCode.VERSION_MISMATCH -> "$name needs a different SwipeTo version."
         ErrorCode.NOT_PAIRED -> "$name doesn't recognise this phone. Pair again."
+        ErrorCode.SERVICE_UNAVAILABLE -> "$name needs the video's link: in YouTube tap Share → SwipeTo (or add a YouTube API key in $name's SwipeTo Settings)."
         else -> "$name said no."
     }
 
-    private fun SharedMedia.info(url: String) = MediaInfo(kind, url, file.mime, title, durationMs)
+    private fun SharedMedia.info(url: String) = MediaInfo(kind, url, file!!.mime, title, durationMs)
 }

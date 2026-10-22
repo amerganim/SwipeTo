@@ -26,7 +26,8 @@
         "not_paired",
         "bad_message",
         "busy",
-        "version_mismatch"
+        "version_mismatch",
+        "service_unavailable"
       ]
     },
     "envelope": {
@@ -90,6 +91,55 @@
         "title"
       ],
       "additionalProperties": false
+    },
+    "appMedia": {
+      "description": "Content of another app's service, opened by the receiver with that service's own player (section 5.4).",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "app"
+        },
+        "service": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]{1,32}$"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "channel": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "contentId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "contentUrl": {
+          "type": "string",
+          "pattern": "^https://[^\\s]+$",
+          "maxLength": 2048
+        },
+        "durationMs": {
+          "$ref": "common.schema.json#/$defs/positionMs"
+        }
+      },
+      "required": [
+        "kind",
+        "service",
+        "title"
+      ],
+      "additionalProperties": false
+    },
+    "anyMedia": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/media"
+        },
+        {
+          "$ref": "common.schema.json#/$defs/appMedia"
+        }
+      ]
     }
   }
 }

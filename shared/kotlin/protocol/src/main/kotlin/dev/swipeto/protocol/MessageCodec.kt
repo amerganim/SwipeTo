@@ -23,6 +23,9 @@ object MessageCodec {
     private val MARKER_NONCE = Regex("^[A-Za-z0-9_-]{16,64}$")
     private val URL = Regex("^https?://[^\\s]+$")
     private val MIME = Regex("^(video|image)/[A-Za-z0-9.+-]+$")
+    private val SERVICE = Regex("^[a-z0-9-]{1,32}$")
+    private val CONTENT_ID = Regex("^[A-Za-z0-9_-]{1,128}$")
+    private val HTTPS_URL = Regex("^https://[^\\s]+$")
 
     fun parse(json: String): Message {
         if (json.toByteArray(Charsets.UTF_8).size > MAX_MESSAGE_BYTES) throw bad("Message is larger than 64 KiB")
@@ -62,9 +65,9 @@ object MessageCodec {
             MessageTypes.AIM_START -> AimStart(f.optionalMatching("nonce", MARKER_NONCE), parsePrefetch(f.optionalObj("prefetch")), id, ts, replyTo)
             MessageTypes.AIM_ACK -> AimAck(f.bool("locked"), id, ts, replyTo)
             MessageTypes.AIM_END -> AimEnd(id, ts, replyTo)
-            MessageTypes.PREPARE -> Prepare(parseMedia(f.obj("media")), f.integer("positionMs"), id, ts, replyTo)
+            MessageTypes.PREPARE -> Prepare(parseMedia(f.obj("media"), allowApp = false), f.integer("positionMs"), id, ts, replyTo)
             MessageTypes.HANDOFF -> Handoff(
-                parseMedia(f.obj("media")), f.integer("positionMs"), f.bool("playing"), f.optionalEnum<Transition>("transition"), id, ts, replyTo,
+                parseMedia(f.obj("media"), allowApp = true), f.integer("positionMs"), f.bool("playing"), f.optionalEnum<Transition>("transition"), id, ts, replyTo,
             )
             MessageTypes.HANDOFF_ACK -> HandoffAck(f.bool("accepted"), f.optionalEnum<ErrorCode>("reason"), id, ts, replyTo)
             MessageTypes.CONTROL -> Control(f.enum<ControlAction>("action"), f.optionalInteger("positionMs"), id, ts, replyTo)
@@ -110,12 +113,25 @@ object MessageCodec {
 
     private fun parsePrefetch(p: Fields?): Prefetch? {
         if (p == null) return null
-        val prefetch = Prefetch(parseMedia(p.obj("media")), p.integer("positionMs"))
+        val prefetch = Prefetch(parseMedia(p.obj("media"), allowApp = false), p.integer("positionMs"))
         p.rejectUnknown()
         return prefetch
     }
 
-    private fun parseMedia(m: Fields): MediaInfo {
+    private fun parseMedia(m: Fields, allowApp: Boolean): MediaInfo {
+        if (m.enum<MediaKind>("kind") == MediaKind.APP) {
+            if (!allowApp) throw bad("media: only a handoff can carry app content")
+            val app = MediaInfo.app(
+                m.matching("service", SERVICE),
+                m.text("title", 0, 200),
+                m.optionalText("channel", 200),
+                m.optionalMatching("contentId", CONTENT_ID),
+                m.optionalMatching("contentUrl", HTTPS_URL, maxLength = 2048),
+                m.optionalInteger("durationMs"),
+            )
+            m.rejectUnknown()
+            return app
+        }
         val media = MediaInfo(
             m.enum<MediaKind>("kind"),
             m.matching("url", URL, maxLength = 2048),
@@ -206,6 +222,15 @@ object MessageCodec {
 
     private fun JsonObjectBuilder.putMedia(media: MediaInfo) = putJsonObject("media") {
         put("kind", media.kind.wire)
+        if (media.isApp) {
+            put("service", media.service)
+            put("title", media.title)
+            media.channel?.let { put("channel", it) }
+            media.contentId?.let { put("contentId", it) }
+            if (media.url.isNotEmpty()) put("contentUrl", media.url)
+            media.durationMs?.let { put("durationMs", it) }
+            return@putJsonObject
+        }
         put("url", media.url)
         put("mime", media.mime)
         put("title", media.title)
@@ -239,12 +264,15 @@ object MessageCodec {
             return if (length in minLength..maxLength) s else throw bad("$where: '$name' must be $minLength–$maxLength characters")
         }
 
+        fun optionalText(name: String, maxLength: Int): String? = if (get(name) == null) null else text(name, 0, maxLength)
+
         fun matching(name: String, pattern: Regex, maxLength: Int = Int.MAX_VALUE): String {
             val s = string(name)
             return if (s.length <= maxLength && pattern.matches(s)) s else throw bad("$where: '$name' has an invalid format")
         }
 
-        fun optionalMatching(name: String, pattern: Regex): String? = if (get(name) == null) null else matching(name, pattern)
+        fun optionalMatching(name: String, pattern: Regex, maxLength: Int = Int.MAX_VALUE): String? =
+            if (get(name) == null) null else matching(name, pattern, maxLength)
 
         fun integer(name: String): Long {
             val v = primitive(name)

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Direct share: each paired screen ("Laptop") is a one-tap target in the share sheet (Share → Laptop). -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <share-target android:targetClass="dev.swipeto.sender.ShareActivity">
+        <data android:mimeType="text/plain" />
+        <data android:mimeType="image/*" />
+        <data android:mimeType="video/*" />
+        <category android:name="dev.swipeto.sender.category.SCREEN" />
+    </share-target>
+</shortcuts>

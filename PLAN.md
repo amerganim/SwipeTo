@@ -1,7 +1,7 @@
 # SwipeTo — phase-by-phase build plan
 
 How to use this file with Claude Code:
-1. Put `CLAUDE.md` and `PLAN.md` at the root of a new, **private** repo.
+1. Put `CLAUDE.md` and `PLAN.md` at the root of the repository.
 2. Open Claude Code in that repo **on your Windows laptop** (the Windows receiver needs Windows to build and run).
 3. For each phase, paste the "Prompt for Claude Code" block. Review, test, commit, then move to the next phase.
 4. Android parts: have Android Studio + an Android phone with USB debugging enabled, on the same Wi-Fi as the laptop.
@@ -214,7 +214,7 @@ docs/protocol.md, schemas, and test vectors for the prefetch field and image nav
 Finish with a demo script I can follow to record a clean demo video.
 ```
 
-> **Before showing this to anyone outside:** talk to a patent attorney about filing (e.g., a US provisional) covering the camera-marker targeting and prefetch-on-aim mechanisms. Keep the repo private.
+> SwipeTo is developed in the open: the protocol and all apps are public.
 
 ---
 
@@ -282,9 +282,9 @@ and mock tools for media.kind = "app" and the svcs TXT record.
 
 ---
 
-## Phase 6 — Samsung Tizen TV receiver (emulator first)
+## Phase 6 — Tizen TV receiver (emulator first)
 
-**Goal:** Same experience on a Samsung TV.
+**Goal:** Same experience on a Tizen TV.
 
 **Tasks**
 - Install Tizen Studio + TV Extension; create a TV emulator instance.
@@ -293,7 +293,7 @@ and mock tools for media.kind = "app" and the svcs TXT record.
   - **Tizen web app (JS)** with a small JS port of the protocol (faster in the emulator; some TV-specific .NET multimedia APIs are not supported in the emulator).
 - Because the emulator sits behind the laptop's virtual network, add an optional **relay mode**: a tiny relay on the laptop that both the phone and the emulator connect to. Real TVs connect directly.
 - Implement discovery, pairing, playback (AVPlay or HTML5 video), state, control, pull-back, edge glow + marker overlay.
-- Later: test on a real Samsung TV via Developer Mode.
+- Later: test on a real Tizen TV via Developer Mode.
 
 **Prompt for Claude Code**
 ```
@@ -346,4 +346,4 @@ a BLE-based TargetResolver on Android with receivers advertising BLE beacons.
 - Android phone → Windows laptop: raise, glow, swipe up, continues at the same second; swipe down returns it.
 - Works for videos and photos, with pairing and basic security.
 - Measured, logged latency numbers.
-- A recorded demo video and a patent attorney consultation before any public showing.
+- A recorded demo video.

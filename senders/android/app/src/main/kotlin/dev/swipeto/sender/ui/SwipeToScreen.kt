@@ -171,7 +171,11 @@ fun SwipeToScreen(viewModel: MainViewModel) {
 
     pairing?.let { PairDialog(it, onSubmit = viewModel::submitCode, onCancel = viewModel::cancelPairing) }
     val navBar = with(LocalDensity.current) { WindowInsets.navigationBars.getBottom(this).toDp() }
-    if (showSettings) SettingsSheet(viewModel.settings, bottomInset = navBar) { showSettings = false }
+    if (showSettings) {
+        SettingsSheet(viewModel.settings, bottomInset = navBar, onDismiss = { showSettings = false }) {
+            OtherAppsSection(viewModel, showFields = debugOn)
+        }
+    }
 }
 
 @Composable

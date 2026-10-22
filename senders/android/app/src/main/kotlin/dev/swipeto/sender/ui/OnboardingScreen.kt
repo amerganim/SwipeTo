@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Pin
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SwipeUp
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Button
@@ -50,6 +51,11 @@ private val pages = listOf(
         Icons.Filled.SwipeUp,
         "Lift and swipe up",
         "While a video plays, lift the phone toward the screen. When it glows, swipe up on the video. Swipe down to bring it back.",
+    ),
+    Page(
+        Icons.Filled.Share,
+        "YouTube and websites",
+        "Watching in YouTube or a browser? Tap Share, then SwipeTo. The screen opens it at the same second, and your phone's notification becomes the remote.",
     ),
     Page(
         Icons.Filled.PhotoLibrary,

@@ -366,6 +366,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     init {
+        // Started for a share or by Android (notification access) as well as by SwipeTo's screen.
+        mediaWatcher.start()
         discovery.start()
         connectivity.registerNetworkCallback(
             NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(),
@@ -521,6 +523,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (!value) startBackgroundService()
         updateAiming()
         updatePreparing()
+    }
+
+    /** Watching other apps and the background service, from wherever SwipeTo was started (not only its screen). */
+    fun startInBackground() {
+        _mediaAccess.value = mediaWatcher.hasAccess
+        mediaWatcher.start()
+        if (!foreground) startBackgroundService()
     }
 
     /**

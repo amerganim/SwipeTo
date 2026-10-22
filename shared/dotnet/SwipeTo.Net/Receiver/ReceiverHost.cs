@@ -63,7 +63,7 @@ public sealed class ReceiverHost : IAsyncDisposable
 
         if (Options.Advertise)
         {
-            _advertiser = new ReceiverAdvertiser(new ReceiverAdvertisement(Options.ReceiverId, Options.Name, Options.Platform, Port, Caps: Options.Caps));
+            _advertiser = new ReceiverAdvertiser(new ReceiverAdvertisement(Options.ReceiverId, Options.Name, Options.Platform, Port, Caps: Options.Caps, Services: Options.Services));
         }
         _log.LogInformation("Receiver {Name} listening on port {Port}", Options.Name, Port);
     }

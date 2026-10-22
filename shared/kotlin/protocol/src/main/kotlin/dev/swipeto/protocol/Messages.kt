@@ -155,13 +155,28 @@ data class Prepare(
     override val type get() = MessageTypes.PREPARE
 }
 
+/**
+ * A file the phone serves ([MediaKind.VIDEO], [MediaKind.IMAGE]), or another app's content
+ * ([MediaKind.APP]): then [url] is the optional `contentUrl` (empty if none), [mime] is empty and
+ * [service] is set.
+ */
 data class MediaInfo(
     val kind: MediaKind,
     val url: String,
     val mime: String,
     val title: String,
     val durationMs: Long? = null,
-)
+    val service: String? = null,
+    val contentId: String? = null,
+    val channel: String? = null,
+) {
+    val isApp: Boolean get() = kind == MediaKind.APP
+
+    companion object {
+        fun app(service: String, title: String, channel: String? = null, contentId: String? = null, contentUrl: String? = null, durationMs: Long? = null) =
+            MediaInfo(MediaKind.APP, contentUrl ?: "", "", title, durationMs, service, contentId, channel)
+    }
+}
 
 /** [transition]: the media follows on from what is showing (album navigation). */
 data class Handoff(

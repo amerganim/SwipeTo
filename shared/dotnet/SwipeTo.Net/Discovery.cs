@@ -7,7 +7,7 @@ using Makaretu.Dns;
 namespace SwipeTo.Net;
 
 /// <summary>What a receiver puts in its mDNS TXT record (docs/protocol.md, section 2).</summary>
-public sealed record ReceiverAdvertisement(string Id, string Name, string Platform, int Port, int Version = 1, string Caps = "video,image");
+public sealed record ReceiverAdvertisement(string Id, string Name, string Platform, int Port, int Version = 1, string Caps = "video,image", string Services = "");
 
 /// <summary>A receiver found on the network, with every address it advertised.</summary>
 public sealed record DiscoveredReceiver(
@@ -44,6 +44,7 @@ public sealed class ReceiverAdvertiser : IDisposable
         _profile.AddProperty("platform", ad.Platform);
         _profile.AddProperty("ver", ad.Version.ToString(CultureInfo.InvariantCulture));
         _profile.AddProperty("caps", ad.Caps);
+        if (ad.Services.Length > 0) _profile.AddProperty("svcs", ad.Services);
         _profile.AddProperty("port", ad.Port.ToString(CultureInfo.InvariantCulture));
 
         _mdns = new MulticastService();

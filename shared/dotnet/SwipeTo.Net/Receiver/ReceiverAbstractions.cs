@@ -21,8 +21,18 @@ public interface IPlaybackTarget
     /// </summary>
     Task LoadAsync(MediaInfo media, long positionMs, bool playing, Transition? transition, CancellationToken ct);
 
-    /// <summary>The URL being played or shown, or null; a handoff of the same URL re-attaches instead of reloading.</summary>
+    /// <summary>
+    /// The <see cref="MediaInfo.Key"/> of what is playing or shown (a file's URL), or null; a handoff of the
+    /// same media re-attaches instead of reloading.
+    /// </summary>
     string? CurrentUrl { get; }
+
+    /// <summary>
+    /// For app content (<see cref="MediaKind.App"/>): finds exactly that content with its service, before
+    /// <c>handoff_ack</c>, so the receiver can refuse with <c>service_unavailable</c> instead of guessing
+    /// (docs/protocol.md, 5.4). True when <see cref="LoadAsync"/> will be able to open it.
+    /// </summary>
+    Task<bool> ResolveAppAsync(MediaInfo media, CancellationToken ct) => Task.FromResult(false);
 
     /// <summary>
     /// Starts opening <paramref name="media"/> at <paramref name="positionMs"/>, paused and unseen, so a
@@ -70,6 +80,9 @@ public sealed class ReceiverOptions
     public required string Name { get; init; }
     public string Platform { get; init; } = "windows";
     public string Caps { get; init; } = "video,image";
+
+    /// <summary>Services whose content this receiver opens (<c>svcs</c> TXT key), e.g. "youtube"; empty for none.</summary>
+    public string Services { get; init; } = "";
 
     /// <summary>0 picks a free port.</summary>
     public int Port { get; init; } = DefaultPort;

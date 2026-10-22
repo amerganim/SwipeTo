@@ -325,9 +325,10 @@ the receiver sends `error {code: "unsupported_media"}` and returns to *Session*.
 
 **Same media again.** A `handoff` whose `media.url` is what the receiver is
 already playing (for example a phone that lost its connection, reconnected and
-handed off again at its best estimate of the position) MUST NOT reload it: the
-receiver seeks only if the position differs by more than about 1.5 s and
-applies `playing`.
+handed off again at its best estimate of the position) MUST NOT reload it and
+MUST NOT seek: the viewer is watching the receiver, whose position is the true
+one (it may have stalled while the phone's network was down, which the phone
+cannot know). It only applies `playing`, then reports `state` as usual.
 
 **Albums.** Moving through photos on the screen is a sequence of `handoff`s of
 `kind: "image"` during *HandoffActive*, each with `transition` `next` or

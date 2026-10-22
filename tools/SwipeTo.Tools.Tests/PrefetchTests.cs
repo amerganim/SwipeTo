@@ -113,11 +113,12 @@ public sealed class PrefetchTests : IAsyncLifetime
         Assert.Equal(fetches, _receiver.Playback.RangeResponses.Count);
         Assert.InRange(state.PositionMs, 42_000, 44_000);
 
-        // Far off: seek, still without reloading.
+        // Far off (the screen stalled while the phone was away): the screen's position stands.
         Assert.True((await _client.HandoffAsync(_video, 90_000, playing: false)).Accepted);
-        var moved = await _client.WaitForStateAsync(s => !s.Playing && s.PositionMs == 90_000);
+        var kept = await _client.WaitForStateAsync(s => !s.Playing);
         Assert.Equal(fetches, _receiver.Playback.RangeResponses.Count);
-        Assert.False(moved.Ended);
+        Assert.InRange(kept.PositionMs, 42_000, 46_000);
+        Assert.False(kept.Ended);
     }
 
     [Fact]

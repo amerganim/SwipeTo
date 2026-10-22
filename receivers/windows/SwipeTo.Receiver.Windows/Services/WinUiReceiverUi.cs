@@ -6,9 +6,9 @@ using SwipeTo.Receiver.Windows.Ui;
 namespace SwipeTo.Receiver.Windows.Services;
 
 /// <summary>Pairing code window and aim overlay, marshalled to the UI thread.</summary>
-internal sealed class WinUiReceiverUi(DispatcherQueue ui, Func<string> receiverName, ILogger log) : IReceiverUi
+internal sealed class WinUiReceiverUi(DispatcherQueue ui, Func<string> receiverName, ILogger log, bool markerLeft = false) : IReceiverUi
 {
-    private readonly AimOverlay _aim = new();
+    private readonly AimOverlay _aim = new(markerLeft);
     private PairingWindow? _pairing;
 
     public void ShowPairingCode(string code, string senderName) => ui.TryEnqueue(() =>

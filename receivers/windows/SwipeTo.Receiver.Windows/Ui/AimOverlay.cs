@@ -16,7 +16,7 @@ namespace SwipeTo.Receiver.Windows.Ui;
 /// transparent, and they do not render when shown without activation.)
 /// </para>
 /// </summary>
-internal sealed partial class AimOverlay : IDisposable
+internal sealed partial class AimOverlay(bool markerLeft = false) : IDisposable
 {
     private const int GlowThickness = 28;
     private const int MarkerSize = 240;
@@ -46,7 +46,7 @@ internal sealed partial class AimOverlay : IDisposable
         EnsureWindow();
         var area = DisplayArea.Primary.OuterBounds;
         var scale = GetDpiForWindow(_hwnd) / 96.0;
-        using var frame = await Task.Run(() => Render(area.Width, area.Height, scale, payload, receiverName, locked));
+        using var frame = await Task.Run(() => Render(area.Width, area.Height, scale, payload, receiverName, locked, markerLeft));
         if (generation != _generation) return false;
 
         Present(frame, area.X, area.Y);
@@ -90,7 +90,7 @@ internal sealed partial class AimOverlay : IDisposable
     }
 
     /// <summary>ARGB frame (GetHbitmap premultiplies it for UpdateLayeredWindow): edge glow plus the marker card.</summary>
-    private static Bitmap Render(int width, int height, double scale, string payload, string receiverName, bool locked)
+    private static Bitmap Render(int width, int height, double scale, string payload, string receiverName, bool locked, bool markerLeft)
     {
         var frame = new Bitmap(width, height, PixelFormat.Format32bppArgb);
         using var g = Graphics.FromImage(frame);
@@ -111,7 +111,7 @@ internal sealed partial class AimOverlay : IDisposable
         var size = (int)(MarkerSize * scale);
         var caption = (int)(CaptionHeight * scale);
         var margin = (int)(MarkerMargin * scale);
-        var card = new Rectangle(width - size - margin, height - size - caption - margin, size, size + caption);
+        var card = new Rectangle(markerLeft ? margin : width - size - margin, height - size - caption - margin, size, size + caption);
         using (var path = RoundedRect(card, (int)(16 * scale)))
         using (var white = new SolidBrush(Color.White))
         {

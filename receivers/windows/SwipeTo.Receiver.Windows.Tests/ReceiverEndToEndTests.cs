@@ -70,7 +70,8 @@ public sealed partial class ReceiverEndToEndTests(ITestOutputHelper output) : IA
         var atMs = long.Parse(first.Groups["at"].Value, CultureInfo.InvariantCulture);
         output.WriteLine($"Handoff to first frame: {startMs} ms, at {atMs} ms");
         Assert.InRange(startMs, 0, 1200);
-        Assert.InRange(atMs, HandoffAtMs - 300, HandoffAtMs + 300);
+        // It starts where the phone will be by then: the phone keeps playing until frames show.
+        Assert.InRange(atMs, HandoffAtMs - 300, HandoffAtMs + startMs + 300);
     }
 
     [E2EFact]

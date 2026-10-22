@@ -222,7 +222,13 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
         var openedMs = clock.ElapsedMilliseconds;
 
         var session = player.PlaybackSession;
-        if (!warm) session.Position = TimeSpan.FromMilliseconds(positionMs);
+        if (!warm)
+        {
+            // The phone keeps playing until we show frames (docs/protocol.md, 5.4): catch up by the load time.
+            var catchUp = playing ? clock.ElapsedMilliseconds : 0;
+            positionMs = media.DurationMs is { } d ? Math.Min(positionMs + catchUp, d) : positionMs + catchUp;
+            session.Position = TimeSpan.FromMilliseconds(positionMs);
+        }
         lock (_gate)
         {
             _player = player;
@@ -336,18 +342,22 @@ internal sealed class WinUiPlayback(DispatcherQueue ui, string dataDir, ILogger 
         {
             lock (_gate)
             {
+                var showing = false;
                 if (_player is not null)
                 {
                     try
                     {
                         _lastPositionMs = (long)_player.PlaybackSession.Position.TotalMilliseconds;
+                        showing = _player.PlaybackSession.PlaybackState == MediaPlaybackState.Playing;
                     }
                     catch (ObjectDisposedException)
                     {
                     }
                 }
-                // Report intent while buffering so the phone's play button does not flicker.
-                return new PlaybackSnapshot(_lastPositionMs, _wantPlaying && !_ended, _ended);
+                // Report intent while buffering so the phone's play button does not flicker, and say
+                // that it is buffering: the phone keeps playing until frames show.
+                var wantPlaying = _wantPlaying && !_ended;
+                return new PlaybackSnapshot(_lastPositionMs, wantPlaying, _ended, Buffering: wantPlaying && !showing);
             }
         }
     }

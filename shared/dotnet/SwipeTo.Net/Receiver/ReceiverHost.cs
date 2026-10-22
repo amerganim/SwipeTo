@@ -38,6 +38,9 @@ public sealed class ReceiverHost : IAsyncDisposable
     internal IReceiverUi Ui { get; }
     public ITrustStore Trust { get; }
 
+    /// <summary>The nonce in this screen's QR marker; shared by every connection, since there is one screen.</summary>
+    public MarkerNonces Markers { get; } = new();
+
     /// <summary>The port actually listened on (useful when <see cref="ReceiverOptions.Port"/> is 0).</summary>
     public int Port { get; private set; }
 

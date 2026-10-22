@@ -12,8 +12,8 @@ android {
         applicationId = "dev.swipeto.sender"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.3.0"
+        versionCode = 2
+        versionName = "0.4.0"
     }
 
     buildTypes {
@@ -54,6 +54,9 @@ dependencies {
     implementation(libs.media3.ui)
     implementation(libs.okhttp)
     implementation(libs.nanohttpd)
+    implementation(libs.camerax.camera2)
+    implementation(libs.camerax.lifecycle)
+    implementation(libs.mlkit.barcode)
     implementation(libs.kotlinx.coroutines.android)
 
     implementation(platform(libs.compose.bom))

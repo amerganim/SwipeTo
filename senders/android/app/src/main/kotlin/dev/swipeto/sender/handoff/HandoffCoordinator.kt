@@ -6,6 +6,7 @@ import dev.swipeto.protocol.ErrorMessage
 import dev.swipeto.protocol.MediaInfo
 import dev.swipeto.protocol.MediaKind
 import dev.swipeto.protocol.PlaybackState
+import dev.swipeto.protocol.SessionState
 import dev.swipeto.sender.data.TrustTokens
 import dev.swipeto.sender.media.MediaFile
 import dev.swipeto.sender.net.ReceiverException
@@ -92,18 +93,25 @@ class HandoffCoordinator(
     private var watchers: Job? = null
     private var lastStateAt = 0L
 
-    /** Hands [media] to [target]. Returns true once the screen has it. */
-    suspend fun sendTo(target: Target, media: SharedMedia): Boolean {
-        if (_state.value !is LinkState.Idle) return false
+    /**
+     * Hands [media] to [target]. Returns true once the screen has it. [ready] is an already open,
+     * greeted connection to that screen (from aiming), which skips connect and hello.
+     */
+    suspend fun sendTo(target: Target, media: SharedMedia, ready: SenderConnection? = null): Boolean {
+        if (_state.value !is LinkState.Idle) {
+            ready?.close()
+            return false
+        }
         _state.value = LinkState.Connecting(target.name)
-        val conn = try {
+        val greeted = ready?.takeIf { !it.closed.value && it.state == SessionState.SESSION }
+        val conn = greeted ?: try {
             connect(target.webSocketUrl)
         } catch (e: Exception) {
             return fail("Can't reach ${target.name}. Is it on the same Wi-Fi?")
         }
         connection = conn
         try {
-            if (!helloOrPair(conn, target)) return false
+            if (greeted == null && !helloOrPair(conn, target)) return false
 
             // A video that already finished here starts over there.
             val finished = media.durationMs?.let { local.positionMs >= it - END_SLACK_MS } ?: false

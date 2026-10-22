@@ -125,6 +125,20 @@ public class ProtocolSessionTests
     }
 
     [Fact]
+    public void Aim_ack_answers_a_lock_only_once_in_a_session()
+    {
+        var phone = new ProtocolSession(Role.Sender);
+        Assert.Throws<ProtocolException>(() => phone.Incoming(new AimAck(true)));
+
+        phone.Outgoing(new Hello(SenderId, "Pixel", Token, 1));
+        phone.Incoming(new HelloAck(ReceiverId, true));
+        phone.Outgoing(new AimStart("Qm9vVGhlU2NyZWVu"));
+        phone.Incoming(new AimAck(true));
+
+        Assert.Equal(SessionState.Session, phone.State);
+    }
+
+    [Fact]
     public void Version_check()
     {
         Assert.True(ProtocolVersion.IsSupported(1));

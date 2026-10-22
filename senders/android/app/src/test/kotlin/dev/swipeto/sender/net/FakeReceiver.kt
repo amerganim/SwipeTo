@@ -1,5 +1,8 @@
 package dev.swipeto.sender.net
 
+import dev.swipeto.protocol.AimAck
+import dev.swipeto.protocol.AimEnd
+import dev.swipeto.protocol.AimStart
 import dev.swipeto.protocol.Control
 import dev.swipeto.protocol.ControlAction
 import dev.swipeto.protocol.ErrorCode
@@ -37,6 +40,8 @@ class FakeReceiver(
     private val receiverId: String = "0e1d2c3b-4a59-4687-9a8b-7c6d5e4f3a21",
     var busy: Boolean = false,
     var answerPings: Boolean = true,
+    /** The marker nonce this screen is "showing"; aim_start with it locks. */
+    var markerNonce: String = "Qm9vVGhlU2NyZWVuTm9uY2U",
 ) : AutoCloseable {
     private val server = MockWebServer()
     private var current: Listener? = null
@@ -49,6 +54,10 @@ class FakeReceiver(
     var playing = false
         private set
     var lastHandoff: Handoff? = null
+        private set
+    @Volatile var glowing = false
+        private set
+    @Volatile var locked = false
         private set
 
     val url: String
@@ -111,6 +120,17 @@ class FakeReceiver(
             synchronized(session) { session.incoming(message) }
             when (message) {
                 is PairRequest -> Unit
+                is AimStart -> {
+                    glowing = true
+                    message.nonce?.let { nonce ->
+                        locked = nonce == markerNonce
+                        reply(AimAck(locked, replyTo = message.id))
+                    }
+                }
+                is AimEnd -> {
+                    glowing = false
+                    locked = false
+                }
                 is PairConfirm -> reply(
                     if (message.code == code) PairResult.success(token(), message.id) else PairResult.failure(PairFailure.WRONG_CODE, message.id),
                 )
@@ -119,6 +139,7 @@ class FakeReceiver(
                     reply(HelloAck(receiverId, ok, if (ok) null else ErrorCode.NOT_PAIRED, replyTo = message.id))
                 }
                 is Handoff -> {
+                    glowing = false
                     if (busy) {
                         reply(HandoffAck(false, ErrorCode.BUSY, replyTo = message.id))
                     } else {

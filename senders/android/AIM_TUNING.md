@@ -21,8 +21,9 @@ portrait and landscape does not change the elevation.
 | Camera at the ceiling | +90° |
 
 Turn on **Settings → Sensor debug** to see the live value, the detector phase and the aim state,
-plus **Aim now / End aim** buttons that skip the sensor entirely. With it on, the app also logs the
-trace to logcat (tag `SwipeToTrace`, about 12 samples a second) for tuning.
+plus **Aim now / End aim** buttons that skip the sensor entirely. Raises, aims, locks, swipes and
+handoffs are written to `files/events.log` on the phone as well as logcat, so a run done unplugged
+can be read afterwards: `adb exec-out run-as dev.swipeto.sender cat files/events.log`.
 
 ## The raise-to-aim rule
 

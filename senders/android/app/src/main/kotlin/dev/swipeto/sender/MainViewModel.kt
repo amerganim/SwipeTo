@@ -8,7 +8,6 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.Uri
 import android.provider.OpenableColumns
-import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
@@ -33,6 +32,7 @@ import dev.swipeto.sender.aim.SwipeClassifier
 import dev.swipeto.sender.aim.SwipeConfig
 import dev.swipeto.sender.data.AppSettings
 import dev.swipeto.sender.data.BearingStore
+import dev.swipeto.sender.data.EventLog
 import dev.swipeto.sender.data.TrustStore
 import dev.swipeto.sender.discovery.DiscoveredReceiver
 import dev.swipeto.sender.discovery.ReceiverDiscovery
@@ -143,8 +143,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         },
         scope = viewModelScope,
-        connect = { url -> SenderConnection.connect(url, trust.identity, log = { Log.i(TAG, it) }) },
-        log = { Log.i(TAG, it) },
+        connect = { url -> SenderConnection.connect(url, trust.identity, log = { EventLog.i(it) }) },
+        log = { EventLog.i(it) },
     )
 
     val link: StateFlow<LinkState> = coordinator.state
@@ -153,8 +153,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val links = StandbyLinks(
         scope = viewModelScope,
         trust = trust,
-        connect = { url -> SenderConnection.connect(url, trust.identity, log = { Log.i(TAG, it) }) },
-        log = { Log.i(TAG, it) },
+        connect = { url -> SenderConnection.connect(url, trust.identity, log = { EventLog.i(it) }) },
+        log = { EventLog.i(it) },
     )
 
     private val aim = AimController(
@@ -175,7 +175,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // The camera proved which screen is in front: remember which way that is.
             if (targeted.verified) learnBearing(targeted.target.id, fromCamera = true)
         },
-        log = { Log.i(TAG, it) },
+        log = { EventLog.i(it) },
     )
 
     val aimState: StateFlow<AimState> = aim.state
@@ -232,6 +232,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** From the activity: sensors, camera and standby links run only while the app is in front. */
     fun setForeground(value: Boolean) {
         foreground = value
+        EventLog.i(if (value) "app in front" else "app in background")
         if (value) {
             _needsCameraPermission.value = settings.cameraTargeting.value && !scanner.hasPermission
             warmLinks()
@@ -268,7 +269,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun swipeUp(): Boolean {
         val picked = _video.value ?: return false
-        Log.i(TAG, "swipe up while ${aimState.value::class.simpleName}")
+        EventLog.i("swipe up while ${aimState.value::class.simpleName}")
         when (aimState.value) {
             is AimState.Targeted -> Unit
             is AimState.Searching -> {
@@ -286,16 +287,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         val chosenBy = (aimState.value as? AimState.Targeted)?.by
         val (target, conn) = aim.takeTarget() ?: run {
-            Log.i(TAG, "swipe up: the aimed connection is gone")
+            EventLog.i("swipe up: the aimed connection is gone")
             _hints.tryEmit("Lost the screen. Raise the phone again.")
             return false
         }
         val receiver = discovery.receivers.value.firstOrNull { it.id == target.id } ?: run {
-            Log.i(TAG, "swipe up: ${target.name} is no longer discovered")
+            EventLog.i("swipe up: ${target.name} is no longer discovered")
             conn.close()
             return false
         }
-        Log.i(TAG, "swipe up: handing off to ${target.name}")
+        EventLog.i("swipe up: handing off to ${target.name}")
         val sent = coordinator.sendTo(
             Target(receiver.id, receiver.name, receiver.webSocketUrl, receiver.host),
             sharedMedia(picked),
@@ -325,17 +326,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (sample.timeMs - lastDebug >= 80) {
                     lastDebug = sample.timeMs
                     _aimDebug.value = AimDebug(orientation.sensorName, sample.elevationDeg, detector.phase, sample.headingDeg, bearingsText())
-                    // With the debug panel on, keep a trace for tuning thresholds against real motion.
-                    if (settings.debugOverlay.value) Log.d("SwipeToTrace", "%d %.1f %s".format(sample.timeMs, sample.elevationDeg, detector.phase))
                 }
                 when (detector.onSample(sample)) {
                     AimPhase.AIMING -> {
                         headingAtRaise = sample.headingDeg
-                        Log.i(TAG, "raise detected at %.1f°, heading %s".format(sample.elevationDeg, sample.headingDeg?.let { "%.0f°".format(it) } ?: "unknown"))
+                        EventLog.i("raise detected at %.1f°, heading %s".format(sample.elevationDeg, sample.headingDeg?.let { "%.0f°".format(it) } ?: "unknown"))
                         if (_video.value != null) aim.onAimStart()
                     }
                     AimPhase.IDLE -> {
-                        Log.i(TAG, "lowered at %.1f°".format(sample.elevationDeg))
+                        EventLog.i("lowered at %.1f°".format(sample.elevationDeg))
                         aim.onAimEnd()
                     }
                     null -> Unit
@@ -362,7 +361,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val now = headingAtRaise ?: heading ?: return
         val learned = pointing.learn(bearings.get(receiverId), now, fromCamera)
         bearings.put(receiverId, learned)
-        Log.i(TAG, "learned direction of $receiverId: %.0f° (%d samples)".format(learned.headingDeg, learned.samples))
+        EventLog.i("learned direction of $receiverId: %.0f° (%d samples)".format(learned.headingDeg, learned.samples))
     }
 
     private fun bearingsText(): String = pairedTargets().mapNotNull { t ->

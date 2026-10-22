@@ -1,7 +1,6 @@
 package dev.swipeto.sender.ui
 
 import android.os.Build
-import android.util.Log
 import android.view.HapticFeedbackConstants
 import android.view.View
 import androidx.compose.animation.AnimatedVisibility
@@ -60,6 +59,7 @@ import dev.swipeto.sender.aim.Sensitivity
 import dev.swipeto.sender.aim.Swipe
 import dev.swipeto.sender.aim.SwipeClassifier
 import dev.swipeto.sender.data.AppSettings
+import dev.swipeto.sender.data.EventLog
 
 /**
  * Reports deliberate vertical swipes over this element without taking touches away from what is
@@ -91,7 +91,7 @@ private fun Modifier.swipeGestures(classifier: SwipeClassifier, onSwipe: (Swipe)
         val dy = (last.position.y - down.position.y) / density
         val duration = last.uptimeMillis - down.uptimeMillis
         val swipe = classifier.classify(dx, dy, duration, velocity.y / density)
-        Log.d("SwipeTo", "drag dx=%.0fdp dy=%.0fdp %dms vy=%.0fdp/s -> %s".format(dx, dy, duration, velocity.y / density, swipe))
+        EventLog.d("drag dx=%.0fdp dy=%.0fdp %dms vy=%.0fdp/s -> %s".format(dx, dy, duration, velocity.y / density, swipe))
         swipe?.let(onSwipe)
     }
 }

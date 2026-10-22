@@ -77,8 +77,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.first
 
 private const val TAG = "SwipeTo"
+
+/** How long a share waits for the screen used last to be discovered (SwipeTo may have just started). */
+private const val SHARE_DISCOVERY_MS = 4_000L
 
 /** Photos are decoded down to about this many pixels on the long side for the phone's own screen. */
 private const val PHOTO_MAX_PX = 1600
@@ -236,10 +241,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _receivers = MutableStateFlow<List<ReceiverItem>>(emptyList())
     val receivers: StateFlow<List<ReceiverItem>> = _receivers.asStateFlow()
 
-    /** Nothing playing on the phone (a link shared from a page that isn't playing). */
+    /** Nothing playing on the phone (a link shared from a page that isn't playing): the screen starts it from the top. */
     private object NoPlayback : LocalPlayback {
         override val positionMs = 0L
-        override val isPlaying = false
+        override val isPlaying = true
         override fun pause() = Unit
         override fun resumeAt(positionMs: Long, play: Boolean) = Unit
     }
@@ -433,7 +438,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         EventLog.i("shared ${sharedLink.service} link ${sharedLink.url} while ${playing?.appLabel ?: "nothing"} played")
         updateExternal(playing)
         if (link.value !is LinkState.Idle) return "SwipeTo: a screen is already playing. Bring it back first."
-        val target = screenToPrepare() ?: return "SwipeTo: got it. Lift the phone toward a screen and swipe up to send."
+        // SwipeTo may have just started for this share: give discovery a moment to find the screen.
+        val target = screenToPrepare()
+            ?: withTimeoutOrNull(SHARE_DISCOVERY_MS) { discovery.receivers.first { screenToPrepare() != null }; screenToPrepare() }
+            ?: return "SwipeTo: got it. Lift the phone toward a screen and swipe up to send."
         val receiver = discovery.receivers.value.firstOrNull { it.id == target.id } ?: return "SwipeTo: ${target.name} is not reachable."
         val source = _external.value ?: Source(sharedOnly(shared!!), NoPlayback)
         handedFrom = source.playback
